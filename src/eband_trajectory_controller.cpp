@@ -120,9 +120,21 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 	    // diffferential drive parameters
 	    node_private.param("differential_drive", differential_drive_hack_, true);
 
+		// get distance between robot center and rear axle
+		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
+		tf::TransformListener listener;
+		tf::StampedTransform transform;
+		try {
+			listener.waitForTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), ros::Duration(3.0) );
+			listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
+			// just the x-component of the transform is needed
+			center_ax_dist_ = fabs(transform.getOrigin().x());
+		} catch (tf::TransformException ex) {
+			ROS_ERROR("%s",ex.what());
+		}
+
 		// requirements for ackermann cinematics
 		node_private.param("turning_radius", turning_radius_, 0.6);
-		node_private.param("center_ax_dist", center_ax_dist_, 0.228);
 	    node_private.param("car", car_, true);
 	    node_private.param("turning_flag", turning_flag_, 1.0);
 	    node_private.param("switch", switch_, false);
@@ -166,8 +178,7 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 		if (car_)
 		{
 			min_vel_lin_ = 0.0;
-			tolerance_trans_ *= 3*turning_radius_;
-			tolerance_rot_ *= 3*turning_radius_;
+			tolerance_trans_ *= 5*turning_radius_;
 		}
 			
 
@@ -621,8 +632,7 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 			else
 				control_deviation.linear.y = control_deviation.linear.y/2.0;
 				
-			control_deviation.linear.x = turning_flag_*sqrt(6*turning_radius_*fabs(control_deviation.linear.y) - control_deviation.linear.y*control_deviation.linear.y);
-			control_deviation.angular.z *= 0.5;
+			control_deviation.linear.x = turning_flag_*sqrt(5*turning_radius_*fabs(control_deviation.linear.y) - control_deviation.linear.y*control_deviation.linear.y);
 			
 			geometry_msgs::Twist intermediate_deviation;
 			intermediate_deviation = transformTwistFromFrame1ToFrame2(control_deviation, elastic_band_.at(0).center.pose, ref_frame_band_);
@@ -863,7 +873,6 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 
 bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviation, double dist_to_goal)
 {
-
 	geometry_msgs::Twist cdev;
 	cdev = control_deviation;
 
@@ -875,7 +884,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	H2.y = cdev.linear.y - center_ax_dist_*sin(cdev.angular.z);
 	
 	double dist_to_next_bubble = sqrt((H2.x-H1.x)*(H2.x-H1.x)+(H2.y-H1.y)*(H2.y-H1.y));
-	if ((dist_to_next_bubble < 0.2*center_ax_dist_ || !checkReachability(elastic_band_.at(0),elastic_band_.at(1))) && !switch_)
+	if ((dist_to_next_bubble < tolerance_trans_ ||!checkReachability(elastic_band_.at(0),elastic_band_.at(1))) && !switch_)
 	{
 		ROS_DEBUG("not reachable");
 		if (fabs(cdev.linear.x) < turning_radius_*fabs(cdev.angular.z))
@@ -897,8 +906,8 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		if (H2.x-H1.x < 0.0)
 			a = 0.2;
 		
-		if (switch_)
-			a *= 3;
+		if (dist_to_goal < 1.0)
+			a = 0.8;
 			
 		theta_reachable = theta_reachable + a*sqrt(fabs(theta_reachable - cdev.angular.z))*sign(theta_reachable - cdev.angular.z);
 	
@@ -915,14 +924,16 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	
 	cdev.linear.y = cdev.angular.z * center_ax_dist_;
 	
+	double slowdown = 1.0;
 	if (switch_)
-	{
-		ROS_DEBUG("slow motion");
-		double slowdown = 0.5;
-		cdev.linear.x *= slowdown;
-		cdev.linear.y *= slowdown;
-		cdev.angular.z *= slowdown;
-	}
+		slowdown = 0.5;
+	if (dist_to_goal < 1.0)
+		slowdown = 0.8;
+
+	cdev.linear.x *= slowdown;
+	cdev.linear.y *= slowdown;
+	cdev.angular.z *= slowdown;
+	
 
 	control_deviation = cdev;
 	
