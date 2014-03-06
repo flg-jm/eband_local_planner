@@ -44,11 +44,13 @@ namespace eband_local_planner{
 void Bubble::setLR()
 {
 	float w_ = center.pose.orientation.w;
-	float z_ = center.pose.orientation.z;	
-	L.x = center.pose.position.x - center_ax_dist*(w_*w_-z_*z_)-radius*(2*w_*z_);
-	L.y = center.pose.position.y - center_ax_dist*(2*w_*z_)+radius*(w_*w_-z_*z_);
-	R.x = center.pose.position.x - center_ax_dist*(w_*w_-z_*z_)+radius*(2*w_*z_);
-	R.y = center.pose.position.y - center_ax_dist*(2*w_*z_)-radius*(w_*w_-z_*z_);
+	float z_ = center.pose.orientation.z;
+	axle.x = center.pose.position.x - center_ax_dist*(w_*w_-z_*z_);
+	axle.y = center.pose.position.y - center_ax_dist*(2*w_*z_);
+	L.x = axle.x - radius*(2*w_*z_);
+	L.y = axle.y + radius*(w_*w_-z_*z_);
+	R.x = axle.x + radius*(2*w_*z_);
+	R.y = axle.y - radius*(w_*w_-z_*z_);
 	
 	return;
 }

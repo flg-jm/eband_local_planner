@@ -109,7 +109,7 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		// optimization - force calculation
 		pn.param("eband_internal_force_gain", internal_force_gain_, 0.4);
 		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 2.0);		
-		pn.param("eband_external_force_gain", external_force_gain_, 0.8);
+		pn.param("eband_external_force_gain", external_force_gain_, 0.4);
 		pn.param("num_iterations_eband_optimization", num_optim_iterations_, 3);
 
 		// recursive approximation of bubble equilibrium position based
@@ -128,6 +128,9 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 
 		// set flag whether visualization availlable to false by default
 		visualization_ = false;
+		
+		// set flag for ackermann cinematics
+		car_ = true;
 	}
 	else
 	{
@@ -1496,6 +1499,10 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 		return true;
 	}
 
+	band.at(bubble_num-1).setLR();
+	curr_bubble.setLR();
+	band.at(bubble_num+1).setLR();
+	
 	// init tmp variables
 	double distance1, distance2;
 	geometry_msgs::Twist difference1, difference2;
@@ -1507,7 +1514,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 
 
 	// get distance between bubbles
-	if(!calcBubbleDistance(curr_bubble.center.pose, band[bubble_num-1].center.pose, distance1))
+	/*if(!calcBubbleDistance(curr_bubble.center.pose, band[bubble_num-1].center.pose, distance1))
 	{
 		ROS_ERROR("Failed to calculate Distance between two bubbles. Aborting calculation of internal forces!");
 		return false;
@@ -1517,7 +1524,9 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 	{
 		ROS_ERROR("Failed to calculate Distance between two bubbles. Aborting calculation of internal forces!");
 		return false;
-	}
+	}*/
+	distance1 = PointDistance(curr_bubble.axle,band.at(bubble_num-1).axle);
+	distance2 = PointDistance(curr_bubble.axle,band.at(bubble_num+1).axle);	
 
 	// get (elementwise) difference bewtween bubbles
 	if(!calcBubbleDifference(curr_bubble.center.pose, band[bubble_num-1].center.pose, difference1))
@@ -1545,23 +1554,20 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 	float orfac1 = (cos(difference1.angular.z/costmap_ros_->getCircumscribedRadius())+1)/2;
 	float orfac2 = (cos(difference2.angular.z/costmap_ros_->getCircumscribedRadius())+1)/2;
 	// or not
-	//orfac1 = 1.0;
-	//orfac2 = 1.0;
+	orfac1 = 1.0;
+	orfac2 = 1.0;
 	
 	wrench.force.x = internal_force_gain_*(difference1.linear.x/distance1*orfac1 + difference2.linear.x/distance2*orfac2);
 	wrench.force.y = internal_force_gain_*(difference1.linear.y/distance1*orfac1 + difference2.linear.y/distance2*orfac2);
 	wrench.force.z = internal_force_gain_*(difference1.linear.z/distance1*orfac1 + difference2.linear.z/distance2*orfac2);
 	wrench.torque.x = internal_force_gain_*(difference1.angular.x/distance1 + difference2.angular.x/distance2);
 	wrench.torque.y = internal_force_gain_*(difference1.angular.y/distance1 + difference2.angular.y/distance2);
+	//wrench.torque.z = internal_force_gain_*(difference1.angular.z + difference2.angular.z);
 	wrench.torque.z = internal_force_gain_*(difference1.angular.z/distance1 + difference2.angular.z/distance2);
 
 	ROS_DEBUG("Internal Forces: x=%f, y=%f, az=%f",wrench.force.x,wrench.force.y,wrench.torque.z);
 
 	//additional ackermann force to arrange bubbles in a carlike-connected way
-
-	band.at(bubble_num-1).setLR();
-	curr_bubble.setLR();
-	band.at(bubble_num+1).setLR();
 	
 	Bubble Bub_p = band.at(bubble_num-1);
 	Bubble Bub = curr_bubble;
@@ -1741,54 +1747,63 @@ bool EBandPlanner::calcExternalForces(int bubble_num, Bubble curr_bubble, geomet
 	//PoseToPose2D(edge, edge_pose2D);
 	
 	
-	if(carOverlap_)
+	if(carOverlap_ && car_)
 	{
 		carOverlap_= false;
-	Bubble vorne;
-	Bubble hinten;
-	double d = costmap_ros_->getCircumscribedRadius()-costmap_ros_->getInscribedRadius();
-	geometry_msgs::Point n;
-	n.x = d*cos(edge_pose2D.theta);
-	n.y = d*sin(edge_pose2D.theta);
-	vorne.center.pose.position.x = curr_bubble.center.pose.position.x + n.x;
-	vorne.center.pose.position.y = curr_bubble.center.pose.position.y + n.y;
-	hinten.center.pose.position.x = curr_bubble.center.pose.position.x - n.x;
-	hinten.center.pose.position.y = curr_bubble.center.pose.position.y - n.y;
+		
+		curr_bubble.setLR();
+		
+		Bubble vorne;
+		Bubble hinten;
+		double d = costmap_ros_->getCircumscribedRadius()-costmap_ros_->getInscribedRadius();
+		geometry_msgs::Point n;
+		n.x = d*cos(edge_pose2D.theta);
+		n.y = d*sin(edge_pose2D.theta);
+		vorne.center.pose.position.x = curr_bubble.center.pose.position.x + n.x;
+		vorne.center.pose.position.y = curr_bubble.center.pose.position.y + n.y;
+		hinten.center.pose.position.x = curr_bubble.center.pose.position.x - n.x;
+		hinten.center.pose.position.y = curr_bubble.center.pose.position.y - n.y;
+		
+		if(!calcObstacleKinematicDistance(vorne.center.pose, distance2))
+		{
+			ROS_DEBUG("Bubble %d probably at edge of map - cannot retrieve distance information to calculate external forces", bubble_num);
+			// we cannot calculate external forces for this bubble - but still continue for the other bubbles
+			return true;
+		}
+		vorne.expansion = distance2;
+		if(!calcObstacleKinematicDistance(hinten.center.pose, distance2))
+		{
+			ROS_DEBUG("Bubble %d probably at edge of map - cannot retrieve distance information to calculate external forces", bubble_num);
+			// we cannot calculate external forces for this bubble - but still continue for the other bubbles
+			return true;
+		}
+		hinten.expansion = distance2;
+		
+		geometry_msgs::WrenchStamped forces_v;
+		geometry_msgs::WrenchStamped forces_h;
+		if(!calcExternalForces(bubble_num, vorne, forces_v))
+		{
+			// calculation of External Forces failed - stopping optimization
+			ROS_DEBUG("Calculation of external forces failed");
+			return false;
+		}
+		if(!calcExternalForces(bubble_num, hinten, forces_h))
+		{
+			// calculation of External Forces failed - stopping optimization
+			ROS_DEBUG("Calculation of external forces failed");
+			return false;
+		}
+		wrench.force.x += forces_v.wrench.force.x + forces_h.wrench.force.x;
+		wrench.force.y += forces_v.wrench.force.y + forces_h.wrench.force.y;
+		
+		wrench.torque.z += (vorne.center.pose.position.x - curr_bubble.axle.x)*forces_v.wrench.force.y - (vorne.center.pose.position.y - curr_bubble.axle.y)*forces_v.wrench.force.x;
+		wrench.torque.z += (hinten.center.pose.position.x - curr_bubble.axle.x)*forces_h.wrench.force.y - (hinten.center.pose.position.y - curr_bubble.axle.y)*forces_h.wrench.force.x;
+		//wrench.torque.z = n.x*(forces_v.wrench.force.y - forces_h.wrench.force.y) - n.y*(forces_v.wrench.force.x - forces_h.wrench.force.x);
+		
+		wrench.force.x += -wrench.torque.z/center_ax_dist_*sin(edge_pose2D.theta);
+		wrench.force.y += wrench.torque.z/center_ax_dist_*cos(edge_pose2D.theta);
 	
-	if(!calcObstacleKinematicDistance(vorne.center.pose, distance2))
-	{
-		ROS_DEBUG("Bubble %d probably at edge of map - cannot retrieve distance information to calculate external forces", bubble_num);
-		// we cannot calculate external forces for this bubble - but still continue for the other bubbles
-		return true;
-	}
-	vorne.expansion = distance2;
-	if(!calcObstacleKinematicDistance(hinten.center.pose, distance2))
-	{
-		ROS_DEBUG("Bubble %d probably at edge of map - cannot retrieve distance information to calculate external forces", bubble_num);
-		// we cannot calculate external forces for this bubble - but still continue for the other bubbles
-		return true;
-	}
-	hinten.expansion = distance2;
-	
-	geometry_msgs::WrenchStamped forces_v;
-	geometry_msgs::WrenchStamped forces_h;
-	if(!calcExternalForces(1, vorne, forces_v))
-	{
-		// calculation of External Forces failed - stopping optimization
-		ROS_DEBUG("Calculation of external forces failed");
-		return false;
-	}
-	if(!calcExternalForces(1, hinten, forces_h))
-	{
-		// calculation of External Forces failed - stopping optimization
-		ROS_DEBUG("Calculation of external forces failed");
-		return false;
-	}
-	wrench.force.x += forces_v.wrench.force.x + forces_h.wrench.force.x;
-	wrench.force.x += forces_v.wrench.force.y + forces_h.wrench.force.y;
-	
-	wrench.torque.z = n.x*(forces_v.wrench.force.y - forces_h.wrench.force.y) - n.y*(forces_v.wrench.force.x - forces_h.wrench.force.x);
-	carOverlap_ = true;
+		carOverlap_ = true;
 	}
 /*
 	// get expansion on bubble at this point
@@ -2215,13 +2230,28 @@ bool EBandPlanner::calcBubbleDifference(geometry_msgs::Pose start_center_pose, g
 	PoseToPose2D(start_center_pose, start_pose2D);
 	PoseToPose2D(end_center_pose, end_pose2D);
 
-	// get rotational difference
-	diff_pose2D.theta = end_pose2D.theta - start_pose2D.theta;
-	diff_pose2D.theta = angles::normalize_angle(diff_pose2D.theta);
+	if(car_)
+	{
+		start_pose2D.x -= center_ax_dist_*cos(start_pose2D.theta);
+		start_pose2D.y -= center_ax_dist_*sin(start_pose2D.theta);
+		end_pose2D.x -= center_ax_dist_*cos(end_pose2D.theta);
+		end_pose2D.y -= center_ax_dist_*sin(end_pose2D.theta);
+	}
+	
 	// get translational difference
 	diff_pose2D.x = end_pose2D.x - start_pose2D.x;
 	diff_pose2D.y = end_pose2D.y - start_pose2D.y;
 
+	//if(car_)
+	//{
+	//	end_pose2D.theta = 2*atan(diff_pose2D.y/diff_pose2D.x) - end_pose2D.theta;
+	//	end_pose2D.theta = angles::normalize_angle(end_pose2D.theta);
+	//}
+	
+	// get rotational difference
+	diff_pose2D.theta = end_pose2D.theta - start_pose2D.theta;
+	diff_pose2D.theta = angles::normalize_angle(diff_pose2D.theta);
+	
 	difference.linear.x = diff_pose2D.x;
 	difference.linear.y = diff_pose2D.y;
 	difference.linear.z = 0.0;
@@ -2231,6 +2261,7 @@ bool EBandPlanner::calcBubbleDifference(geometry_msgs::Pose start_center_pose, g
 	difference.angular.z = diff_pose2D.theta*costmap_ros_->getCircumscribedRadius();
 
 	// TODO take into account kinematic properties of body
+
 
 	return true;
 }

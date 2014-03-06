@@ -67,7 +67,7 @@ struct Bubble
 	double expansion;
 	double center_ax_dist;
 	double radius;
-	geometry_msgs::Point L,R;
+	geometry_msgs::Point axle,L,R;
 	void setLR();	
 };
 

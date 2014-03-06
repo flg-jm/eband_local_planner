@@ -907,7 +907,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			a = 0.2;
 		
 		if (dist_to_goal < 1.0)
-			a = 0.8;
+			a = 0.3;
 			
 		theta_reachable = theta_reachable + a*sqrt(fabs(theta_reachable - cdev.angular.z))*sign(theta_reachable - cdev.angular.z);
 	

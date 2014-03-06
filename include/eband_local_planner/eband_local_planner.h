@@ -178,7 +178,7 @@ class EBandPlanner{
 		boost::shared_ptr<EBandVisualization> eband_visual_; // pointer to visualization object
 
 		// flags
-		bool initialized_, visualization_, carOverlap_;
+		bool initialized_, visualization_, carOverlap_, car_;
 
 		// data
 		std::vector<geometry_msgs::Point> footprint_spec_; // specification of robot footprint as vector of corner points
