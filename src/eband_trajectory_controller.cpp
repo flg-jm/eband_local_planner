@@ -90,7 +90,7 @@ void EBandTrajectoryCtrl::configure_callback(eband_local_planner::EBandLocalPlan
 	acc_max_rot_ = config.max_rotational_acceleration;
 
 	rotation_correction_threshold_ = config.rotation_correction_threshold;
-
+	
 }
 
 
@@ -106,7 +106,7 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 		dyn_server_ = new dynamic_reconfigure::Server<EBandLocalPlannerConfig>(node_private);
 		dynamic_reconfigure::Server<eband_local_planner::EBandLocalPlannerConfig>::CallbackType dyn_callback_ = boost::bind(&EBandTrajectoryCtrl::configure_callback, this, _1, _2);
   		dyn_server_->setCallback(dyn_callback_);
-	
+		
 		// read parameters from parameter server
 		//node_private.param("max_vel_lin", max_vel_lin_, 0.75);
 		//node_private.param("max_vel_th", max_vel_th_, 1.0);
@@ -120,21 +120,21 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 	    // diffferential drive parameters
 	    node_private.param("differential_drive", differential_drive_hack_, true);
 
+		// requirements for ackermann cinematics
+		node_private.param("center_ax_dist", center_ax_dist_, 0.228);
 		// get distance between robot center and rear axle
 		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
 		tf::TransformListener listener;
 		tf::StampedTransform transform;
 		try {
-			listener.waitForTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), ros::Duration(3.0) );
 			listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
 			// just the x-component of the transform is needed
 			center_ax_dist_ = fabs(transform.getOrigin().x());
 		} catch (tf::TransformException ex) {
 			ROS_ERROR("%s",ex.what());
 		}
-
-		// requirements for ackermann cinematics
-		node_private.param("turning_radius", turning_radius_, 0.6);
+		node_private.param("max_steering_angle", max_steering_angle_, 0.7);
+		turning_radius_ = 2*center_ax_dist_/tan(max_steering_angle_);
 	    node_private.param("car", car_, true);
 	    node_private.param("turning_flag", turning_flag_, 1.0);
 	    node_private.param("switch", switch_, false);
@@ -173,7 +173,10 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 		node_private.param("stop_smoothing_dist_to_goal", stop_smoothing_dist_, 0.2);
 
 		start_position_counter_ = 0;
-		
+
+		// Initialize the collision velocity filter
+		cvf_ = boost::shared_ptr<CollisionVelocityFilter>(new CollisionVelocityFilter(virt_mass_, costmap_ros));
+				
 		// set other tolerance values in case of ackermann-dynamics
 		if (car_)
 		{
@@ -451,14 +454,14 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	}
 
 	// by default our control deviation is the difference between the bubble centers
-	double abs_ctrl_dev;
+	//double abs_ctrl_dev;
 	control_deviation = bubble_diff;
 
 
-	ang_pseudo_dist = control_deviation.angular.z * costmap_ros_->getCircumscribedRadius();
-	abs_ctrl_dev = sqrt( (control_deviation.linear.x * control_deviation.linear.x) +
+	//ang_pseudo_dist = control_deviation.angular.z * costmap_ros_->getCircumscribedRadius();
+	/*abs_ctrl_dev = sqrt( (control_deviation.linear.x * control_deviation.linear.x) +
 								(control_deviation.linear.y * control_deviation.linear.y) +
-									(ang_pseudo_dist * ang_pseudo_dist) );
+									(ang_pseudo_dist * ang_pseudo_dist) );*/
 
 	// yet depending on the expansion of our bubble we might want to adapt this point
 	if(scaled_radius < bubble_distance)
@@ -551,10 +554,10 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	}
 
 	// plot control deviation
-	ang_pseudo_dist = control_deviation.angular.z * costmap_ros_->getCircumscribedRadius();
-	abs_ctrl_dev = sqrt( (control_deviation.linear.x * control_deviation.linear.x) +
+	//ang_pseudo_dist = control_deviation.angular.z * costmap_ros_->getCircumscribedRadius();
+	/*abs_ctrl_dev = sqrt( (control_deviation.linear.x * control_deviation.linear.x) +
 								(control_deviation.linear.y * control_deviation.linear.y) +
-									(ang_pseudo_dist * ang_pseudo_dist) );
+									(ang_pseudo_dist * ang_pseudo_dist) );*/
 
 
 	if(visualization_)
@@ -575,53 +578,53 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	}
 
 
-        const geometry_msgs::Point& goal = (--elastic_band_.end())->center.pose.position;
-        const double dx = elastic_band_.at(0).center.pose.position.x - goal.x;
-        const double dy = elastic_band_.at(0).center.pose.position.y - goal.y;
-        const double dist_to_goal = sqrt(dx*dx + dy*dy);
-        
-        // Assuming we're far enough from the final goal, make sure to rotate so
-        // we're facing the right way
-        rotation_correction_threshold_ = 5.0; 
-        if (dist_to_goal > rotation_correction_threshold_)
-        {
-        
-          const double angular_diff = angularDiff(control_deviation, elastic_band_.at(0).center.pose);
-          // TODO See Issue #1, #2
-          const double vel = pid_.updatePid(-angular_diff, ros::Duration(1/ctrl_freq_));
-          //const double vel = 0;
-          const double mult = fabs(vel) > max_vel_th_ ? max_vel_th_/fabs(vel) : 1.0;
-          control_deviation.angular.z = vel*mult;
-          const double abs_vel = fabs(control_deviation.angular.z);
+    const geometry_msgs::Point& goal = (--elastic_band_.end())->center.pose.position;
+    const double dx = elastic_band_.at(0).center.pose.position.x - goal.x;
+    const double dy = elastic_band_.at(0).center.pose.position.y - goal.y;
+    const double dist_to_goal = sqrt(dx*dx + dy*dy);
+    
+    // Assuming we're far enough from the final goal, make sure to rotate so
+    // we're facing the right way 
+    if (dist_to_goal > rotation_correction_threshold_ && !car_)
+    {
+    
+      const double angular_diff = angularDiff(control_deviation, elastic_band_.at(0).center.pose);
+      // TODO See Issue #1, #2
+      const double vel = pid_.updatePid(-angular_diff, ros::Duration(1/ctrl_freq_));
+      //const double vel = 0;
+      const double mult = fabs(vel) > max_vel_th_ ? max_vel_th_/fabs(vel) : 1.0;
+      control_deviation.angular.z = vel*mult;
+      const double abs_vel = fabs(control_deviation.angular.z);
 
-          ROS_DEBUG_THROTTLE_NAMED (1.0, "angle_correction",
-                                    "Angular diff is %.2f and desired angular "
-                                    "vel is %.2f.  Initial translation velocity "
-                                    "is %.2f, %.2f", angular_diff,
-                                    control_deviation.angular.z,
-                                    control_deviation.linear.x,
-                                    control_deviation.linear.y);
-          const double trans_mult = max(0.01, 1.0 - abs_vel/max_vel_th_); // There are some weird tf errors if I let it be 0
-          control_deviation.linear.x *= trans_mult;
-          control_deviation.linear.y *= trans_mult;
-          ROS_DEBUG_THROTTLE_NAMED (1.0, "angle_correction",
-                                    "Translation multiplier is %.2f and scaled "
-                                    "translational velocity is %.2f, %.2f",
-                                    trans_mult, control_deviation.linear.x,
-                                    control_deviation.linear.y);
-        }
-        else
-          ROS_DEBUG_THROTTLE_NAMED (1.0, "angle_correction",
-                                    "Not applying angle correction because "
-                                    "distance to goal is %.2f", dist_to_goal);
+      ROS_DEBUG_THROTTLE_NAMED (1.0, "angle_correction",
+                                "Angular diff is %.2f and desired angular "
+                                "vel is %.2f.  Initial translation velocity "
+                                "is %.2f, %.2f", angular_diff,
+                                control_deviation.angular.z,
+                                control_deviation.linear.x,
+                                control_deviation.linear.y);
+      const double trans_mult = max(0.01, 1.0 - abs_vel/max_vel_th_); // There are some weird tf errors if I let it be 0
+      control_deviation.linear.x *= trans_mult;
+      control_deviation.linear.y *= trans_mult;
+      ROS_DEBUG_THROTTLE_NAMED (1.0, "angle_correction",
+                                "Translation multiplier is %.2f and scaled "
+                                "translational velocity is %.2f, %.2f",
+                                trans_mult, control_deviation.linear.x,
+                                control_deviation.linear.y);
+    }
+    else
+      ROS_DEBUG_THROTTLE_NAMED (1.0, "angle_correction",
+                                "Not applying angle correction because "
+                                "distance to goal is %.2f", dist_to_goal);
                                     
         
 
 	
+	// now convert into robot-body frame
+	control_deviation = transformTwistFromFrame1ToFrame2(control_deviation, ref_frame_band_, elastic_band_.at(0).center.pose);
 	
 	if(car_)
 	{
-		control_deviation = transformTwistFromFrame1ToFrame2(control_deviation, ref_frame_band_, elastic_band_.at(0).center.pose);
 		if (fabs(control_deviation.linear.x) <= tolerance_trans_ && fabs(control_deviation.linear.y) > tolerance_trans_ && fabs(control_deviation.angular.z) <= tolerance_rot_ && !switch_ && (elastic_band_.size() == 2 || dist_to_goal < center_ax_dist_) && fabs(last_vel_.linear.x) < 0.01)
 		{
 			switch_ = true;
@@ -682,8 +685,6 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	desired_velocity.linear.x = k_p_/k_nu_ * control_deviation.linear.x;
 	desired_velocity.linear.y = k_p_/k_nu_ * control_deviation.linear.y;
 	desired_velocity.angular.z = k_p_/k_nu_ * control_deviation.angular.z;
-
-	//robot_cmd = desired_velocity;
 	
 	
 	// get max vel for current bubble
@@ -725,6 +726,12 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 		desired_velocity.linear.y *= scale_des_vel;
 	}
 
+	// FILTER
+	double v_max = max_vel_lin_;
+	if (currbub_maxvel_abs < max_vel_th_)
+		v_max = currbub_maxvel_abs;
+	cvf_->filterVelocity(car_,v_max, desired_velocity);
+	
 	// calculate resulting force (accel. resp.) (Khatib86 - Realtime Obstacle Avoidance)
 	geometry_msgs::Twist acc_desired;
 	acc_desired = robot_cmd;
@@ -759,7 +766,7 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	last_vel_.angular.z = last_vel_.angular.z + acc_desired.angular.z / ctrl_freq_;
 
 
-	// we are almost done now take into accoun stick-slip and similar nasty things
+	// we are almost done now take into account stick-slip and similar nasty things
 
 	// last checks - limit current twist cmd (upper and lower bounds)
 	last_vel_ = limitTwist(last_vel_);
@@ -813,8 +820,6 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	// finally set robot_cmd (to non-zero value)
 	robot_cmd = last_vel_;
 
-	// now convert into robot-body frame
-	//robot_cmd = transformTwistFromFrame1ToFrame2(robot_cmd, ref_frame_band_, elastic_band_.at(0).center.pose);
 
 	// check whether we reached the end of the band
 	int curr_target_bubble = 1;
@@ -851,7 +856,7 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 		}
 	}
 	
-	// if Ackermann cinematics is desired check the twist to hold the constraints
+	// if Ackermann cinematics is desired check again the twist to hold the constraints
 	if(car_)
 	{	
 		if (fabs(robot_cmd.linear.x) < fabs(robot_cmd.angular.z)*turning_radius_)
@@ -864,7 +869,9 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	}
 
 	twist_cmd = robot_cmd;
+	last_vel_ = robot_cmd;
 	
+	// in the case we are still in the correcting mode. turn it off when the goal is reached
 	if (goal_reached)
 		switch_ = false;
 	
@@ -884,11 +891,17 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	H2.y = cdev.linear.y - center_ax_dist_*sin(cdev.angular.z);
 	
 	double dist_to_next_bubble = sqrt((H2.x-H1.x)*(H2.x-H1.x)+(H2.y-H1.y)*(H2.y-H1.y));
-	if ((dist_to_next_bubble < tolerance_trans_ ||!checkReachability(elastic_band_.at(0),elastic_band_.at(1))) && !switch_)
+	if ((dist_to_next_bubble < tolerance_trans_ || ( !checkReachability(elastic_band_.at(0),elastic_band_.at(1)) && fabs(H2.x-H1.x) < 2*tolerance_trans_ )) && !switch_)
 	{
-		ROS_DEBUG("not reachable");
 		if (fabs(cdev.linear.x) < turning_radius_*fabs(cdev.angular.z))
-			cdev.linear.x *= turning_radius_*fabs(cdev.angular.z/cdev.linear.x);
+			if (fabs(cdev.linear.x) < 0.01)
+				cdev.linear.x = turning_radius_*fabs(cdev.angular.z);
+			else
+				cdev.linear.x *= turning_radius_*fabs(cdev.angular.z/cdev.linear.x);
+	}
+	else if(dist_to_goal < 0.8*tolerance_trans_ && fabs(cdev.angular.z) > tolerance_rot_)
+	{
+		cdev.linear.x = turning_radius_*fabs(cdev.angular.z);
 	}
 	else
 	{	
@@ -926,7 +939,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	
 	double slowdown = 1.0;
 	if (switch_)
-		slowdown = 0.5;
+		slowdown = 0.3;
 	if (dist_to_goal < 1.0)
 		slowdown = 0.8;
 

@@ -8,7 +8,7 @@ include($ENV{ROS_ROOT}/core/rosbuild/rosbuild.cmake)
 #  RelWithDebInfo : w/ debug symbols, w/ optimization
 #  MinSizeRel     : w/o debug symbols, w/ optimization, stripped binaries
 #set(ROS_BUILD_TYPE RelWithDebInfo)
-
+#set(ROS_COMPILE_FLAGS "-DDEBUG_EBAND_")
 
 rosbuild_init()
 
@@ -26,7 +26,7 @@ set(LIBRARY_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/lib)
 rosbuild_add_boost_directories()
 
 # build the library
-rosbuild_add_library(eband_local_planner src/eband_local_planner_ros.cpp src/eband_local_planner.cpp src/conversions_and_types.cpp src/eband_visualization.cpp src/eband_trajectory_controller.cpp)
+rosbuild_add_library(eband_local_planner src/eband_local_planner_ros.cpp src/eband_local_planner.cpp src/conversions_and_types.cpp src/eband_visualization.cpp src/eband_trajectory_controller.cpp src/collision_velocity_filter.cpp)
 target_link_libraries(eband_local_planner tinyxml)
 
 

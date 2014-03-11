@@ -74,19 +74,6 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 
 		// get footprint of the robot
 		footprint_spec_ = costmap_ros_->getRobotFootprint();
-
-		// get distance between robot center and rear axle
-		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
-		tf::TransformListener listener;
-		tf::StampedTransform transform;
-		try {
-			listener.waitForTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), ros::Duration(3.0) );
-			listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
-			// just the x-component of the transform is needed
-			center_ax_dist_ = fabs(transform.getOrigin().x());
-		} catch (tf::TransformException ex) {
-			ROS_ERROR("%s",ex.what());
-		}
 		
 		// create Node Handle with name of plugin (as used in move_base for loading)
 		ros::NodeHandle pn("~/" + name);
@@ -94,9 +81,23 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		// read parameters from parameter server
 		
 		// requirements for ackermann cinematics
-		pn.param("turning_radius", turning_radius_, 0.7);
+		pn.param("center_ax_dist", center_ax_dist_, 0.228);
+		// get distance between robot center and rear axle
+		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
+		tf::TransformListener listener;
+		tf::StampedTransform transform;
+		try {
+			listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
+			// just the x-component of the transform is needed
+			center_ax_dist_ = fabs(transform.getOrigin().x());
+		} catch (tf::TransformException ex) {
+			ROS_ERROR("%s",ex.what());
+		}
+		pn.param("max_steering_angle", max_steering_angle_, 0.7);
+		turning_radius_ = 2*center_ax_dist_/tan(max_steering_angle_);
+		turning_radius_ *= 1.2; // the radius in planning is bigger than the actual radius, to have some latitude in the trajectory control
 		pn.param("overlap_tolerance", overlap_tolerance_, 0.0);
-		pn.param("fill_tol", fill_tol_, 0.7);
+		pn.param("fill_tol", fill_tol_, 0.5);
 		pn.param("remove_tol", remove_tol_, 1.0);
 				
 		// connectivity checking
@@ -107,9 +108,9 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		pn.param("eband_tiny_bubble_expansion", tiny_bubble_expansion_, 0.01);
 
 		// optimization - force calculation
-		pn.param("eband_internal_force_gain", internal_force_gain_, 0.4);
-		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 2.0);		
-		pn.param("eband_external_force_gain", external_force_gain_, 0.4);
+		pn.param("eband_internal_force_gain", internal_force_gain_, 0.6);
+		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 1.0);		
+		pn.param("eband_external_force_gain", external_force_gain_, 0.6);
 		pn.param("num_iterations_eband_optimization", num_optim_iterations_, 3);
 
 		// recursive approximation of bubble equilibrium position based
@@ -218,6 +219,8 @@ bool EBandPlanner::setPlan(const std::vector<geometry_msgs::PoseStamped>& global
 	}
 	
 	carOverlap_ = true;
+	
+	ROS_DEBUG("Footprint: %f", footprint_spec_[1].x);
 	
 	return true;
 }
@@ -1625,13 +1628,15 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 		fy += endfaktor*(Bub.L.y-Bub_n.R.y)/distLR/distLR;
 		tz += (Bub.L.x-Bub.R.x)/2.0*fy-(Bub.L.y-Bub.R.y)/2.0*fx;
 	}
-	
-	fx += -tz/center_ax_dist_*sin(Bub_pose2D.theta);
-	fy += tz/center_ax_dist_*cos(Bub_pose2D.theta);
-		
+			
 	wrench.force.x += fx;
 	wrench.force.y += fy;
 	wrench.torque.z += tz;
+	
+	// Tourques are applied on the rear axle, not the robot center. Robot center gets additional force from the tourque
+	wrench.force.x += -wrench.torque.z/center_ax_dist_*sin(Bub_pose2D.theta);
+	wrench.force.y += wrench.torque.z/center_ax_dist_*cos(Bub_pose2D.theta);
+
 		
 	ROS_DEBUG("Additional Force (x, y, theta) = (%f, %f, %f)", wrench.force.x, wrench.force.y, wrench.torque.z);
 		

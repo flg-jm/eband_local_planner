@@ -167,6 +167,7 @@ class EBandPlanner{
 		double equilibrium_relative_overshoot_; ///@brief percentage of old force for which a new force is considered significant when higher as this value
 		double significant_force_; ///@brief lower bound for absolute value of force below which it is treated as insignificant (no recursive approximation)
     		double costmap_weight_; // the costmap weight or scaling factor
+		double max_steering_angle_; // the maximal steering angle for ackermann-cinematics
 		double turning_radius_; // the minimal turning radius for ackermann-cinematics
 		double center_ax_dist_; // distance from robot center to axles
 		double overlap_tolerance_; // regulates distance of the turning circles which counts as gap

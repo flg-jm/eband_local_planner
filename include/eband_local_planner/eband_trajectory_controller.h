@@ -44,6 +44,7 @@
 // classes which are part of this package
 #include <eband_local_planner/conversions_and_types.h>
 #include <eband_local_planner/eband_visualization.h>
+#include <eband_local_planner/collision_velocity_filter.h>
 
 // geometry_msg
 #include <geometry_msgs/PoseStamped.h>
@@ -103,6 +104,12 @@ class EBandTrajectoryCtrl{
 		 */
 		void initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros);
 
+    		///
+    		/// @brief  reads obstacles from costmap
+    		/// @param  obstacles - 2D occupancy grid in rolling window mode!
+    		///
+    		void obstaclesCB(const nav_msgs::GridCells::ConstPtr &obstacles);
+
 		/**
 		 * @brief passes a reference to the eband visualization object which can be used to visualize the band optimization
 		 * @param pointer to visualization object
@@ -129,6 +136,10 @@ class EBandTrajectoryCtrl{
 		bool getTwistDifferentialDrive(geometry_msgs::Twist& twist_cmd, bool& goal_reached);
 		bool getTwistAckermann(geometry_msgs::Twist& control_deviation, double dist_to_goal);
 
+		/// declaration of subscriber
+    		ros::Subscriber obstacles_sub_;
+
+
 	private:
 
 		dynamic_reconfigure::Server<eband_local_planner::EBandLocalPlannerConfig> * dyn_server_;
@@ -137,13 +148,15 @@ class EBandTrajectoryCtrl{
 		// pointer to external objects (do NOT delete object)
 		costmap_2d::Costmap2DROS* costmap_ros_; ///<@brief pointer to costmap
 		boost::shared_ptr<EBandVisualization> target_visual_; // pointer to visualization object
+		boost::shared_ptr<CollisionVelocityFilter> cvf_;
 
     control_toolbox::Pid pid_;
 
 		// parameters
     bool car_;
-    double turning_flag_, angular_weight_;
+    double turning_flag_;
     bool switch_;
+    double max_steering_angle_; // the maximal steering angle for ackermann-cinematics
     double turning_radius_; // the minimal turning radius for ackermann-cinematics
     double center_ax_dist_; // distance from robot center to axles	
     bool differential_drive_hack_;

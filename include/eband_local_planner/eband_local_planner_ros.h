@@ -48,6 +48,7 @@
 #include <eband_local_planner/conversions_and_types.h>
 #include <eband_local_planner/eband_visualization.h>
 #include <eband_local_planner/eband_trajectory_controller.h>
+#include <eband_local_planner/collision_velocity_filter.h>
 
 // local planner specific classes which provide some macros
 #include <base_local_planner/goal_functions.h>
