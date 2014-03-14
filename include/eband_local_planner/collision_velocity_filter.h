@@ -106,7 +106,7 @@ class CollisionVelocityFilter
     ///
     void obstaclesCB(const nav_msgs::GridCells::ConstPtr &obstacles);
 
-	void filterVelocity(bool car, double vmax, geometry_msgs::Twist& twist);
+	void filterVelocity(bool car, double& vmax, geometry_msgs::Twist& twist);
 
 
     ///

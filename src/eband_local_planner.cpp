@@ -82,20 +82,33 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		
 		// requirements for ackermann cinematics
 		pn.param("center_ax_dist", center_ax_dist_, 0.228);
+		
 		// get distance between robot center and rear axle
 		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
 		tf::TransformListener listener;
 		tf::StampedTransform transform;
-		try {
-			listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
-			// just the x-component of the transform is needed
-			center_ax_dist_ = fabs(transform.getOrigin().x());
-		} catch (tf::TransformException ex) {
-			ROS_ERROR("%s",ex.what());
+		bool waitfortransform = true;
+		int trial_count = 0;
+		while(ros::ok() && waitfortransform && trial_count < 5)
+		{
+			waitfortransform = false;
+			ros::Duration(0.1).sleep();
+			try {
+				listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
+				// just the x-component of the transform is needed
+				center_ax_dist_ = fabs(transform.getOrigin().x());
+			} catch (tf::TransformException ex) {
+				ROS_ERROR("%s",ex.what());
+				waitfortransform = true;
+			}
+			trial_count++;
 		}
+		if(waitfortransform)
+			ROS_WARN("Could not get the distance between center and rear axle by transform listener. Default value: %f", center_ax_dist_);
+			
 		pn.param("max_steering_angle", max_steering_angle_, 0.7);
 		turning_radius_ = 2*center_ax_dist_/tan(max_steering_angle_);
-		turning_radius_ *= 1.2; // the radius in planning is bigger than the actual radius, to have some latitude in the trajectory control
+		turning_radius_ *= 1.1; // the radius in planning is bigger than the actual radius, to have some latitude in the trajectory control
 		pn.param("overlap_tolerance", overlap_tolerance_, 0.0);
 		pn.param("fill_tol", fill_tol_, 0.5);
 		pn.param("remove_tol", remove_tol_, 1.0);
@@ -108,9 +121,9 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		pn.param("eband_tiny_bubble_expansion", tiny_bubble_expansion_, 0.01);
 
 		// optimization - force calculation
-		pn.param("eband_internal_force_gain", internal_force_gain_, 0.6);
+		pn.param("eband_internal_force_gain", internal_force_gain_, 1.0);
 		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 1.0);		
-		pn.param("eband_external_force_gain", external_force_gain_, 0.6);
+		pn.param("eband_external_force_gain", external_force_gain_, 0.3);
 		pn.param("num_iterations_eband_optimization", num_optim_iterations_, 3);
 
 		// recursive approximation of bubble equilibrium position based
@@ -1553,19 +1566,11 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 
 	// now calculate wrench - forces model an elastic band and are normed (distance) to render forces for small and large bubbles the same
 	
-	// Force dependend on orientation
-	float orfac1 = (cos(difference1.angular.z/costmap_ros_->getCircumscribedRadius())+1)/2;
-	float orfac2 = (cos(difference2.angular.z/costmap_ros_->getCircumscribedRadius())+1)/2;
-	// or not
-	orfac1 = 1.0;
-	orfac2 = 1.0;
-	
-	wrench.force.x = internal_force_gain_*(difference1.linear.x/distance1*orfac1 + difference2.linear.x/distance2*orfac2);
-	wrench.force.y = internal_force_gain_*(difference1.linear.y/distance1*orfac1 + difference2.linear.y/distance2*orfac2);
-	wrench.force.z = internal_force_gain_*(difference1.linear.z/distance1*orfac1 + difference2.linear.z/distance2*orfac2);
+	wrench.force.x = internal_force_gain_*(difference1.linear.x/distance1 + difference2.linear.x/distance2);
+	wrench.force.y = internal_force_gain_*(difference1.linear.y/distance1 + difference2.linear.y/distance2);
+	wrench.force.z = internal_force_gain_*(difference1.linear.z/distance1 + difference2.linear.z/distance2);
 	wrench.torque.x = internal_force_gain_*(difference1.angular.x/distance1 + difference2.angular.x/distance2);
 	wrench.torque.y = internal_force_gain_*(difference1.angular.y/distance1 + difference2.angular.y/distance2);
-	//wrench.torque.z = internal_force_gain_*(difference1.angular.z + difference2.angular.z);
 	wrench.torque.z = internal_force_gain_*(difference1.angular.z/distance1 + difference2.angular.z/distance2);
 
 	ROS_DEBUG("Internal Forces: x=%f, y=%f, az=%f",wrench.force.x,wrench.force.y,wrench.torque.z);
@@ -1582,7 +1587,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 	float addForce_fac = ackermann_force_gain_*turning_radius_;
 	float startfaktor = addForce_fac;
 	float endfaktor = addForce_fac;
-	if(bubble_num == 1) startfaktor *= 3.0;
+	if(bubble_num == 1) startfaktor *= 1.0;
 	if(bubble_num == ((int) band.size() - 2)) endfaktor *= 3.0;
 
 	double fx = 0;

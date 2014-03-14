@@ -122,17 +122,30 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 
 		// requirements for ackermann cinematics
 		node_private.param("center_ax_dist", center_ax_dist_, 0.228);
+		
 		// get distance between robot center and rear axle
 		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
 		tf::TransformListener listener;
 		tf::StampedTransform transform;
-		try {
-			listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
-			// just the x-component of the transform is needed
-			center_ax_dist_ = fabs(transform.getOrigin().x());
-		} catch (tf::TransformException ex) {
-			ROS_ERROR("%s",ex.what());
+		bool waitfortransform = true;
+		int trial_count = 0;
+		while(ros::ok() && waitfortransform && trial_count < 5)
+		{
+			waitfortransform = false;
+			ros::Duration(0.1).sleep();
+			try {
+				listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
+				// just the x-component of the transform is needed
+				center_ax_dist_ = fabs(transform.getOrigin().x());
+			} catch (tf::TransformException ex) {
+				ROS_ERROR("%s",ex.what());
+				waitfortransform = true;
+			}
+			trial_count++;
 		}
+		if(waitfortransform)
+			ROS_WARN("Could not get the distance between center and rear axle by transform listener. Default value: %f", center_ax_dist_);
+			
 		node_private.param("max_steering_angle", max_steering_angle_, 0.7);
 		turning_radius_ = 2*center_ax_dist_/tan(max_steering_angle_);
 	    node_private.param("car", car_, true);
@@ -691,6 +704,14 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	int curr_bub_num = 0;
 	currbub_maxvel_abs = getBubbleTargetVel(curr_bub_num, elastic_band_, currbub_maxvel_dir);
 
+	// FILTER
+	double v_max = max_vel_lin_;
+	if (currbub_maxvel_abs < max_vel_th_)
+		v_max = currbub_maxvel_abs;
+	cvf_->filterVelocity(car_,v_max, robot_cmd);
+	if (v_max < currbub_maxvel_abs)
+		currbub_maxvel_abs = v_max;
+	
 	// if neccessarry scale desired vel to stay lower than currbub_maxvel_abs
 	ang_pseudo_dist = desired_velocity.angular.z * costmap_ros_->getCircumscribedRadius();
 	desvel_abs = sqrt( (desired_velocity.linear.x * desired_velocity.linear.x) +
@@ -725,12 +746,6 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 		desired_velocity.linear.x *= scale_des_vel;
 		desired_velocity.linear.y *= scale_des_vel;
 	}
-
-	// FILTER
-	double v_max = max_vel_lin_;
-	if (currbub_maxvel_abs < max_vel_th_)
-		v_max = currbub_maxvel_abs;
-	cvf_->filterVelocity(car_,v_max, desired_velocity);
 	
 	// calculate resulting force (accel. resp.) (Khatib86 - Realtime Obstacle Avoidance)
 	geometry_msgs::Twist acc_desired;
@@ -886,18 +901,23 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	geometry_msgs::Point H1, H2;
 	
 	H1.x = - center_ax_dist_;
-	H1.y = 0;
+	H1.y = 0.0;
 	H2.x = cdev.linear.x - center_ax_dist_*cos(cdev.angular.z);
 	H2.y = cdev.linear.y - center_ax_dist_*sin(cdev.angular.z);
 	
 	double dist_to_next_bubble = sqrt((H2.x-H1.x)*(H2.x-H1.x)+(H2.y-H1.y)*(H2.y-H1.y));
-	if ((dist_to_next_bubble < tolerance_trans_ || ( !checkReachability(elastic_band_.at(0),elastic_band_.at(1)) && fabs(H2.x-H1.x) < 2*tolerance_trans_ )) && !switch_)
+	if ((dist_to_next_bubble < tolerance_trans_ || !checkReachability(H1,H2, cdev.angular.z)) && !switch_)
+	//if (!checkReachability(H1,H2, cdev.angular.z) && !switch_ && dist_to_goal > 2*turning_radius_)
+	//if (dist_to_next_bubble > tolerance_trans_ && !switch_)
 	{
+		ROS_ERROR("not reachable");
 		if (fabs(cdev.linear.x) < turning_radius_*fabs(cdev.angular.z))
-			if (fabs(cdev.linear.x) < 0.01)
+		{
+			if (fabs(cdev.linear.x) < 0.001)
 				cdev.linear.x = turning_radius_*fabs(cdev.angular.z);
 			else
 				cdev.linear.x *= turning_radius_*fabs(cdev.angular.z/cdev.linear.x);
+		}
 	}
 	else if(dist_to_goal < 0.8*tolerance_trans_ && fabs(cdev.angular.z) > tolerance_rot_)
 	{
@@ -906,42 +926,102 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	else
 	{	
 		double theta_reachable = angles::normalize_angle(2*atan((H2.y-H1.y)/(H2.x-H1.x)));	
-		double radius,arclength;
-		if (fabs(theta_reachable) > 0.1)
+		double radius, arclength, kr;
+		if (fabs(theta_reachable) > 0.001)
 		{
-			radius = fabs((H2.x-H1.x)/sin(theta_reachable));
-			arclength = fabs(radius*theta_reachable);
+			radius = (H2.x-H1.x)/sin(theta_reachable);
+			arclength = radius*theta_reachable;
+			kr = 1.0/radius;
 		}
 		else
-			arclength = fabs(H2.x-H1.x);
+		{
+			arclength = H2.x-H1.x;
+			kr = theta_reachable/arclength;
+		}
+		bool rechts;
+		bool korrektur = false;
+			
+		if (fabs(theta_reachable - cdev.angular.z) > tolerance_rot_)
+		{
+			ROS_ERROR("ganz normal");
+			korrektur = true;
+			geometry_msgs::Point L, R;
+			double turn_rad = 1.1*turning_radius_;
+			L.x = H2.x - turn_rad*sin(cdev.angular.z);
+			L.y = H2.y + turn_rad*cos(cdev.angular.z);
+			R.x = H2.x + turn_rad*sin(cdev.angular.z);
+			R.y = H2.y - turn_rad*cos(cdev.angular.z);
+
+			double alpha_L = angles::normalize_angle(2.0*atan((L.y - turn_rad)/(L.x - H1.x)));
+			double alpha_R = angles::normalize_angle(2.0*atan((R.y + turn_rad)/(R.x - H1.x)));
+			
+			double radius_L, arclength_L;
+			double radius_R, arclength_R;
+			
+			if (fabs(alpha_L) < 0.001)
+			{
+				arclength_L = L.x - H1.x;
+			}
+			else
+			{
+				radius_L = L.x/sin(alpha_L)+turn_rad;
+				arclength_L = alpha_L*radius_L;
+			}
+				
+			if (fabs(alpha_R) < 0.001)
+			{
+				arclength_R = R.x - H1.x;
+			}
+			else
+			{
+				radius_R = R.x/sin(alpha_R)-turn_rad;
+				arclength_R = alpha_R*radius_R;
+			}
+			
+			if ((fabs(arclength_R) < fabs(arclength_L)) && arclength*arclength_R > 0)
+			{
+				kr = alpha_R/arclength_R;
+				rechts = true;
+			}
+			else
+			{
+				kr = alpha_L/arclength_L;
+				rechts = false;
+			}
+			
+		}
 			
 		double a = 0.1;
-		if (H2.x-H1.x < 0.0)
+		if (arclength < 0.0)
 			a = 0.2;
 		
 		if (dist_to_goal < 1.0)
 			a = 0.3;
 			
-		theta_reachable = theta_reachable + a*sqrt(fabs(theta_reachable - cdev.angular.z))*sign(theta_reachable - cdev.angular.z);
-	
-		double kr = fabs(theta_reachable/arclength);
-			
-		if (kr > 1/turning_radius_)
-			kr = 1/turning_radius_;
+		theta_reachable = theta_reachable + a*(theta_reachable - cdev.angular.z);
 		
-		if (kr > 0.01)
-			cdev.linear.x = (H2.x+center_ax_dist_)/fabs(H2.x+center_ax_dist_)*fabs(theta_reachable)/kr;	
+		if(korrektur && rechts && theta_reachable/arclength > kr)
+			kr = theta_reachable/arclength;
+		if(korrektur && !rechts && theta_reachable/arclength < kr)
+			kr = theta_reachable/arclength;
+		if(!korrektur)
+			kr = theta_reachable/arclength;
 		
-		cdev.angular.z = angles::normalize_angle(theta_reachable);
+		if (fabs(kr) > 1.0/turning_radius_)
+			kr *= 1.0/fabs(kr)/turning_radius_;
+		
+		cdev.linear.x = arclength;
+		cdev.angular.z = angles::normalize_angle(arclength*kr);
+		
 	}
 	
 	cdev.linear.y = cdev.angular.z * center_ax_dist_;
 	
-	double slowdown = 1.0;
+	double slowdown = 1;
 	if (switch_)
-		slowdown = 0.3;
+		slowdown = 0.2;
 	if (dist_to_goal < 1.0)
-		slowdown = 0.8;
+		slowdown = 0.5;
 
 	cdev.linear.x *= slowdown;
 	cdev.linear.y *= slowdown;
@@ -1174,22 +1254,25 @@ geometry_msgs::Twist EBandTrajectoryCtrl::limitTwist(const geometry_msgs::Twist&
 }
 
 
-bool EBandTrajectoryCtrl::checkReachability(Bubble bubble1, Bubble bubble2)
+bool EBandTrajectoryCtrl::checkReachability(geometry_msgs::Point P1, geometry_msgs::Point P2, double theta)
 {
 
-		bubble1.radius = turning_radius_;
-		bubble2.radius =  turning_radius_;
-		bubble1.center_ax_dist = center_ax_dist_;
-		bubble2.center_ax_dist = center_ax_dist_;
-		bubble1.setLR();
-		bubble2.setLR();
+		geometry_msgs::Point L1,R1,L2,R2;
+		L1.x = P1.x;
+		L1.y = P1.y + turning_radius_;
+		R1.x = P1.x;
+		R1.y = P1.y - turning_radius_;
+		L2.x = P2.x - turning_radius_*sin(theta);
+		L2.y = P2.y + turning_radius_*cos(theta);
+		R2.x = P2.x + turning_radius_*sin(theta);
+		R2.y = P2.y - turning_radius_*cos(theta);
 		
-		double distLR = sqrt((bubble1.L.x-bubble2.R.x) * (bubble1.L.x-bubble2.R.x) + (bubble1.L.y-bubble2.R.y) * (bubble1.L.y-bubble2.R.y));
-		if(distLR < 2.0*bubble1.radius)
+		double distLR = sqrt((L1.x-R2.x) * (L1.x-R2.x) + (L1.y-R2.y) * (L1.y-R2.y));
+		if(distLR < 2.0*turning_radius_)
 			return false;
 		
-		distLR = sqrt((bubble1.R.x-bubble2.L.x) * (bubble1.R.x-bubble2.L.x) + (bubble1.R.y-bubble2.L.y) * (bubble1.R.y-bubble2.L.y));
-		if(distLR < 2.0*bubble1.radius)
+		distLR = sqrt((L2.x-R1.x) * (L2.x-R1.x) + (L2.y-R1.y) * (L2.y-R1.y));
+		if(distLR < 2.0*turning_radius_)
 			return false;
 	
 	// everything fine - bubbles are reachable

@@ -91,7 +91,7 @@ CollisionVelocityFilter::CollisionVelocityFilter(double virt_mass, costmap_2d::C
 
   // parameters for obstacle avoidence and velocity adjustment
   if(!nh_.hasParam("stop_threshold")) ROS_WARN("Used default parameter for stop_threshold [0.1 m]");
-  nh_.param("stop_threshold", stop_threshold_, 0.10);
+  nh_.param("stop_threshold", stop_threshold_, 0.05);
 
   if(!nh_.hasParam("obstacle_damping_dist")) ROS_WARN("Used default parameter for obstacle_damping_dist [5.0 m]");
   nh_.param("obstacle_damping_dist", obstacle_damping_dist_, 7.0);
@@ -119,9 +119,9 @@ CollisionVelocityFilter::CollisionVelocityFilter(double virt_mass, costmap_2d::C
 CollisionVelocityFilter::~CollisionVelocityFilter(){}
 
 // joystick_velocityCB reads twist command from joystick
-void CollisionVelocityFilter::filterVelocity(bool car, double v_max, geometry_msgs::Twist& twist){
-  v_max_ = v_max;
-  
+void CollisionVelocityFilter::filterVelocity(bool car, double& v_max, geometry_msgs::Twist& twist){
+  //v_max_ = v_max;
+
   pthread_mutex_lock(&m_mutex);
 
   last_vel_ = twist;
@@ -136,11 +136,13 @@ void CollisionVelocityFilter::filterVelocity(bool car, double v_max, geometry_ms
     last_vel_.linear.x = 0;
     last_vel_.linear.y = 0;
     last_vel_.angular.z = 0;
+    v_max_ = 0;
   }else{
 	// adjust velocity if we are about to run in an obstacle
 	performControllerStep();
   }
   twist = last_vel_;
+  v_max = v_max_;
 }
 
 void CollisionVelocityFilter::setFootprint(costmap_2d::Costmap2DROS* costmap_ros){
@@ -195,7 +197,6 @@ void CollisionVelocityFilter::performControllerStep() {
 
   //Slow down in any way while approximating an obstacle:
   if(closest_obstacle_dist_ < influence_radius_) {
-    double F_x, F_y;
     double vx_d, vy_d, vx_factor, vy_factor;
     double kv_obst=kv_, vx_max_obst=vx_max, vy_max_obst=vy_max;
 
@@ -231,7 +232,9 @@ void CollisionVelocityFilter::performControllerStep() {
     //cmd_vel.linear.y = last_vel_.linear.y + F_y / virt_mass_ * dt;
 
   }
-
+  double acc_max = 0.4;
+  v_max_ = sqrt(2.0 * (closest_obstacle_dist_-stop_threshold_) * acc_max);
+	
   pthread_mutex_lock(&m_mutex);
   last_vel_ = cmd_vel;
   pthread_mutex_unlock(&m_mutex);
@@ -259,7 +262,7 @@ void CollisionVelocityFilter::obstacleHandler() {
   zero_position.x=0.0f;  
   zero_position.y=0.0f;
   zero_position.z=0.0f;
-  bool use_circumscribed=false, use_tube=true;
+  bool use_circumscribed=true, use_tube=true;
 
     
   //Calculate corner angles in robot_frame:
@@ -270,11 +273,10 @@ void CollisionVelocityFilter::obstacleHandler() {
   corner_front_right = atan2(footprint_right_, footprint_front_);
 
   //Decide, whether circumscribed or tube argument should be used for filtering:
-  if(fabs(last_vel_.linear.x) <= 0.005f && fabs(last_vel_.linear.y) <= 0.005f) {
-    use_tube = false;
-    use_circumscribed=true;
+  //if(fabs(last_vel_.linear.x) <= 0.005f && fabs(last_vel_.linear.y) <= 0.005f) {
+    //use_tube = false;
     //disable tube filter at very slow velocities
-  }
+  //}
   if(!use_tube) {
     if( fabs(last_vel_.angular.z) <= 0.01f) {
       use_circumscribed = false;

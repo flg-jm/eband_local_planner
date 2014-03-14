@@ -239,7 +239,7 @@ class EBandTrajectoryCtrl{
 		 * @param iterator to second bubble
 		 * @return true if bubbles are reachable
 		 */
-		bool checkReachability(Bubble bubble1, Bubble bubble2);
+		bool checkReachability(geometry_msgs::Point P1, geometry_msgs::Point P2, double theta);
 
 };
 };
