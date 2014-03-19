@@ -154,8 +154,8 @@ class EBandTrajectoryCtrl{
 
 		// parameters
     bool car_;
-    double turning_flag_;
-    bool switch_;
+    double forward_,turning_, degrees_, v_max_;
+    bool switch_,turn_,reverse_;
     double max_steering_angle_; // the maximal steering angle for ackermann-cinematics
     double turning_radius_; // the minimal turning radius for ackermann-cinematics
     double center_ax_dist_; // distance from robot center to axles	

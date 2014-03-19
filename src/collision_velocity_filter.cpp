@@ -85,13 +85,13 @@ CollisionVelocityFilter::CollisionVelocityFilter(double virt_mass, costmap_2d::C
   local_costmap_nh_.param(costmap_parameter_source+"/robot_base_frame", robot_frame_, std::string("/base_link"));
 
   if(!nh_.hasParam("influence_radius")) ROS_WARN("Used default parameter for influence_radius [1.5 m]");
-  nh_.param("influence_radius", influence_radius_, 0.7);
+  nh_.param("influence_radius", influence_radius_, 1.0);
   closest_obstacle_dist_ = influence_radius_;
   closest_obstacle_angle_ = 0.0;
 
   // parameters for obstacle avoidence and velocity adjustment
   if(!nh_.hasParam("stop_threshold")) ROS_WARN("Used default parameter for stop_threshold [0.1 m]");
-  nh_.param("stop_threshold", stop_threshold_, 0.05);
+  nh_.param("stop_threshold", stop_threshold_, 0.1);
 
   if(!nh_.hasParam("obstacle_damping_dist")) ROS_WARN("Used default parameter for obstacle_damping_dist [5.0 m]");
   nh_.param("obstacle_damping_dist", obstacle_damping_dist_, 7.0);
@@ -119,12 +119,12 @@ CollisionVelocityFilter::CollisionVelocityFilter(double virt_mass, costmap_2d::C
 CollisionVelocityFilter::~CollisionVelocityFilter(){}
 
 // joystick_velocityCB reads twist command from joystick
-void CollisionVelocityFilter::filterVelocity(bool car, double& v_max, geometry_msgs::Twist& twist){
+void CollisionVelocityFilter::filterVelocity(bool car, double& v_max, geometry_msgs::Twist& desired_vel){
   //v_max_ = v_max;
 
   pthread_mutex_lock(&m_mutex);
 
-  last_vel_ = twist;
+  last_vel_ = desired_vel;
 
   pthread_mutex_unlock(&m_mutex);
 
@@ -141,7 +141,9 @@ void CollisionVelocityFilter::filterVelocity(bool car, double& v_max, geometry_m
 	// adjust velocity if we are about to run in an obstacle
 	performControllerStep();
   }
-  twist = last_vel_;
+  	//ROS_ERROR("Closestobstacle: (dist,angle) = (%f,%f)",closest_obstacle_dist_,closest_obstacle_angle_);
+	//ROS_ERROR("Vmax = %f",v_max_);
+  desired_vel = last_vel_;
   v_max = v_max_;
 }
 
@@ -196,7 +198,7 @@ void CollisionVelocityFilter::performControllerStep() {
   if (vy_max > fabs(cmd_vel.linear.y)) vy_max = fabs(cmd_vel.linear.y);
 
   //Slow down in any way while approximating an obstacle:
-  if(closest_obstacle_dist_ < influence_radius_) {
+  /*if(closest_obstacle_dist_ < influence_radius_) {
     double vx_d, vy_d, vx_factor, vy_factor;
     double kv_obst=kv_, vx_max_obst=vx_max, vy_max_obst=vy_max;
 
@@ -225,15 +227,27 @@ void CollisionVelocityFilter::performControllerStep() {
     //cmd_vel.linear.x += vx_factor * kp_/kv_obst * closest_obstacle_dist_x;
     //cmd_vel.linear.y += vy_factor * kp_/kv_obst * closest_obstacle_dist_y;
 
-	cmd_vel.linear.x *= vx_factor; 
+	cmd_vel.linear.x *= vx_factor;
     cmd_vel.linear.y *= vy_factor;
+    cmd_vel.angular.z *= vy_factor;
     
     //cmd_vel.linear.x = last_vel_.linear.x + F_x / virt_mass_ * dt;
     //cmd_vel.linear.y = last_vel_.linear.y + F_y / virt_mass_ * dt;
 
-  }
-  double acc_max = 0.4;
+  }*/
+  double acc_max = 0.3;
   v_max_ = sqrt(2.0 * (closest_obstacle_dist_-stop_threshold_) * acc_max);
+  if(closest_obstacle_dist_ < influence_radius_) {
+	   double ang_pseudo_dist = cmd_vel.angular.z * sqrt(footprint_front_*footprint_front_+footprint_left_*footprint_left_);
+	   double abs_cmd_vel = sqrt(cmd_vel.linear.x*cmd_vel.linear.x+cmd_vel.linear.y*cmd_vel.linear.y+ang_pseudo_dist*ang_pseudo_dist);
+	   if (abs_cmd_vel > v_max_)
+	   {
+		   double scale = v_max_/abs_cmd_vel;
+		   cmd_vel.linear.x *= scale;
+		   cmd_vel.linear.y *= scale;
+		   cmd_vel.angular.z *= scale;
+	   }
+  }
 	
   pthread_mutex_lock(&m_mutex);
   last_vel_ = cmd_vel;

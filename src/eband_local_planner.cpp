@@ -108,7 +108,7 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 			
 		pn.param("max_steering_angle", max_steering_angle_, 0.7);
 		turning_radius_ = 2*center_ax_dist_/tan(max_steering_angle_);
-		turning_radius_ *= 1.1; // the radius in planning is bigger than the actual radius, to have some latitude in the trajectory control
+		turning_radius_ *= 1.2; // the radius in planning is bigger than the actual radius, to have some latitude in the trajectory control
 		pn.param("overlap_tolerance", overlap_tolerance_, 0.0);
 		pn.param("fill_tol", fill_tol_, 0.5);
 		pn.param("remove_tol", remove_tol_, 1.0);
@@ -121,9 +121,9 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		pn.param("eband_tiny_bubble_expansion", tiny_bubble_expansion_, 0.01);
 
 		// optimization - force calculation
-		pn.param("eband_internal_force_gain", internal_force_gain_, 1.0);
+		pn.param("eband_internal_force_gain", internal_force_gain_, 0.5);
 		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 1.0);		
-		pn.param("eband_external_force_gain", external_force_gain_, 0.3);
+		pn.param("eband_external_force_gain", external_force_gain_, 0.05);
 		pn.param("num_iterations_eband_optimization", num_optim_iterations_, 3);
 
 		// recursive approximation of bubble equilibrium position based
@@ -746,19 +746,24 @@ bool EBandPlanner::removeAndFill(std::vector<Bubble>& band, std::vector<Bubble>:
 
 
 	// check if band has at least one bubble between start and end
-	if(band.size() >= 2)
+	if(band.size() > 2)
 	{
 		overlap_tolerance_ = fill_tol_;
-		overlap = checkOverlap(*start_iter, *end_iter);
+	}
+	if(band.size() == 2)
+	{
+		overlap_tolerance_ = 0.0;
+	}
+	
+	overlap = checkOverlap(*start_iter, *end_iter);
+	
+	if(overlap)
+	{
+		#ifdef DEBUG_EBAND_
+		ROS_DEBUG("Refining Recursive - small Carlike Gap detected, fill not");
+		#endif
 		
-		if(overlap)
-		{
-			#ifdef DEBUG_EBAND_
-			ROS_DEBUG("Refining Recursive - small Carlike Gap detected, fill not");
-			#endif
-			
-			return true;
-		}
+		return true;
 	}
 
 
@@ -1530,7 +1535,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 
 
 	// get distance between bubbles
-	/*if(!calcBubbleDistance(curr_bubble.center.pose, band[bubble_num-1].center.pose, distance1))
+	if(!calcBubbleDistance(curr_bubble.center.pose, band[bubble_num-1].center.pose, distance1))
 	{
 		ROS_ERROR("Failed to calculate Distance between two bubbles. Aborting calculation of internal forces!");
 		return false;
@@ -1540,9 +1545,9 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 	{
 		ROS_ERROR("Failed to calculate Distance between two bubbles. Aborting calculation of internal forces!");
 		return false;
-	}*/
-	distance1 = PointDistance(curr_bubble.axle,band.at(bubble_num-1).axle);
-	distance2 = PointDistance(curr_bubble.axle,band.at(bubble_num+1).axle);	
+	}
+	//distance1 = PointDistance(curr_bubble.axle,band.at(bubble_num-1).axle);
+	//distance2 = PointDistance(curr_bubble.axle,band.at(bubble_num+1).axle);	
 
 	// get (elementwise) difference bewtween bubbles
 	if(!calcBubbleDifference(curr_bubble.center.pose, band[bubble_num-1].center.pose, difference1))
@@ -1588,7 +1593,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 	float startfaktor = addForce_fac;
 	float endfaktor = addForce_fac;
 	if(bubble_num == 1) startfaktor *= 1.0;
-	if(bubble_num == ((int) band.size() - 2)) endfaktor *= 3.0;
+	if(bubble_num == ((int) band.size() - 2)) endfaktor *= 2.0;
 
 	double fx = 0;
 	double fy = 0;
@@ -1638,9 +1643,11 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 	wrench.force.y += fy;
 	wrench.torque.z += tz;
 	
-	// Tourques are applied on the rear axle, not the robot center. Robot center gets additional force from the tourque
-	wrench.force.x += -wrench.torque.z/center_ax_dist_*sin(Bub_pose2D.theta);
-	wrench.force.y += wrench.torque.z/center_ax_dist_*cos(Bub_pose2D.theta);
+	// Tourques from the additional force are applied on the rear axle, not the robot center. Robot center gets additional force from the tourque
+	//wrench.force.x += -wrench.torque.z/center_ax_dist_*sin(Bub_pose2D.theta);
+	//wrench.force.y += wrench.torque.z/center_ax_dist_*cos(Bub_pose2D.theta);
+	//wrench.force.x += -tz/center_ax_dist_*sin(Bub_pose2D.theta);
+	//wrench.force.y += tz/center_ax_dist_*cos(Bub_pose2D.theta);
 
 		
 	ROS_DEBUG("Additional Force (x, y, theta) = (%f, %f, %f)", wrench.force.x, wrench.force.y, wrench.torque.z);
@@ -2240,23 +2247,17 @@ bool EBandPlanner::calcBubbleDifference(geometry_msgs::Pose start_center_pose, g
 	PoseToPose2D(start_center_pose, start_pose2D);
 	PoseToPose2D(end_center_pose, end_pose2D);
 
-	if(car_)
+	/*if(car_)
 	{
 		start_pose2D.x -= center_ax_dist_*cos(start_pose2D.theta);
 		start_pose2D.y -= center_ax_dist_*sin(start_pose2D.theta);
 		end_pose2D.x -= center_ax_dist_*cos(end_pose2D.theta);
 		end_pose2D.y -= center_ax_dist_*sin(end_pose2D.theta);
-	}
+	}*/
 	
 	// get translational difference
 	diff_pose2D.x = end_pose2D.x - start_pose2D.x;
 	diff_pose2D.y = end_pose2D.y - start_pose2D.y;
-
-	//if(car_)
-	//{
-	//	end_pose2D.theta = 2*atan(diff_pose2D.y/diff_pose2D.x) - end_pose2D.theta;
-	//	end_pose2D.theta = angles::normalize_angle(end_pose2D.theta);
-	//}
 	
 	// get rotational difference
 	diff_pose2D.theta = end_pose2D.theta - start_pose2D.theta;
