@@ -65,10 +65,11 @@ struct Bubble
 {
 	geometry_msgs::PoseStamped center;
 	double expansion;
-	double center_ax_dist;
-	double radius;
+	// important points: middle of the rear axle, centers of the left and right turning circles
 	geometry_msgs::Point axle,L,R;
-	void setLR();	
+	
+	// Function to calculate the position of the three points
+	void setBubbleparameters(double turning_radius, double center_ax_dist);	
 };
 
 enum AddAtPosition {add_front, add_back};

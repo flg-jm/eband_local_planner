@@ -41,16 +41,22 @@
 
 namespace eband_local_planner{
 
-void Bubble::setLR()
+void Bubble::setBubbleparameters(double turning_radius, double center_ax_dist)
 {
-	float w_ = center.pose.orientation.w;
-	float z_ = center.pose.orientation.z;
-	axle.x = center.pose.position.x - center_ax_dist*(w_*w_-z_*z_);
-	axle.y = center.pose.position.y - center_ax_dist*(2*w_*z_);
-	L.x = axle.x - radius*(2*w_*z_);
-	L.y = axle.y + radius*(w_*w_-z_*z_);
-	R.x = axle.x + radius*(2*w_*z_);
-	R.y = axle.y - radius*(w_*w_-z_*z_);
+	float w = center.pose.orientation.w;
+	float z = center.pose.orientation.z;
+	// orientation is given in quaternions
+	// to get the orientation angle theta use the relations: w^2-z^2 = cos(theta), 2*w*z = sin(theta)
+	
+	// middle of the rear axle by given center pose:
+	axle.x = center.pose.position.x - center_ax_dist*(w*w-z*z);
+	axle.y = center.pose.position.y - center_ax_dist*(2*w*z);
+	
+	// left and right centers of the minimal turning circles
+	L.x = axle.x - turning_radius*(2*w*z);
+	L.y = axle.y + turning_radius*(w*w-z*z);
+	R.x = axle.x + turning_radius*(2*w*z);
+	R.y = axle.y - turning_radius*(w*w-z*z);
 	
 	return;
 }
