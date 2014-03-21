@@ -75,6 +75,7 @@
 // costmap & geometry
 #include <costmap_2d/costmap_2d_ros.h>
 
+#include <eband_local_planner/conversions_and_types.h>
 
 namespace eband_local_planner{
 
@@ -92,7 +93,7 @@ class CollisionVelocityFilter
     ///
     CollisionVelocityFilter();
 
-    CollisionVelocityFilter(double virt_mass_, costmap_2d::Costmap2DROS* costmap_ros);
+    CollisionVelocityFilter(costmap_2d::Costmap2DROS* costmap_ros);
     
     ///
     /// @brief  Destructor
@@ -106,7 +107,11 @@ class CollisionVelocityFilter
     ///
     void obstaclesCB(const nav_msgs::GridCells::ConstPtr &obstacles);
 
-	void filterVelocity(double& vmax, geometry_msgs::Twist& desired_vel);
+	///
+    /// @brief  filters the desired velocity
+    /// @param  desired velocity
+    ///
+	void filterVelocity(geometry_msgs::Twist& desired_vel);
 
 
     ///
@@ -115,6 +120,17 @@ class CollisionVelocityFilter
     ///
     void setFootprint(costmap_2d::Costmap2DROS* costmap_ros);
     
+    ///
+    /// @brief  returns maximum velocity
+    ///
+    double getMaximumVelocity();
+    
+    ///
+    /// @brief  provides two member variables
+    /// @param  distance to closest obstacle
+    /// @param  angle to closest obstacle
+    ///
+    void getClosestObstacle(double& closest_obstacle_dist, double& closest_obstacle_angle);
   
     /// create a handle for this node, initialize node
     ros::NodeHandle nh_;
@@ -144,20 +160,7 @@ class CollisionVelocityFilter
     void obstacleHandler();
 
 
-    /* helper functions */
-
-
-    ///
-    /// @brief  returns the sign of x
-    ///
-    double sign(double x);
-    
-    ///
-    /// @brief  computes distance between two points
-    /// @param  a,b - Points 
-    /// @return distance
-    ///
-    double getDistance2d(geometry_msgs::Point a, geometry_msgs::Point b);
+    /* helper function */
 
     ///
     /// @brief  checks if obstacle lies already within footprint -> this is ignored due to sensor readings of the hull etc
@@ -186,10 +189,7 @@ class CollisionVelocityFilter
     double closest_obstacle_dist_, closest_obstacle_angle_;
 
     // variables for slow down behaviour
-    double last_time_;
-    double kp_, kv_;
     double v_max_;
-    double virt_mass_;
 
 
 }; //CollisionVelocityFilter

@@ -517,6 +517,8 @@ bool EBandPlanner::optimizeBand(std::vector<Bubble>& band)
 		return false;
 	}
 			
+	near_obstacle_ = false;
+	
 	// get a copy of current (valid) band
 	std::vector<Bubble> tmp_band = band;
 
@@ -1546,8 +1548,8 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 		ROS_ERROR("Failed to calculate Distance between two bubbles. Aborting calculation of internal forces!");
 		return false;
 	}
-	//distance1 = PointDistance(curr_bubble.axle,band.at(bubble_num-1).axle);
-	//distance2 = PointDistance(curr_bubble.axle,band.at(bubble_num+1).axle);	
+	//distance1 = getDistance2d(curr_bubble.axle,band.at(bubble_num-1).axle);
+	//distance2 = getDistance2d(curr_bubble.axle,band.at(bubble_num+1).axle);	
 
 	// get (elementwise) difference bewtween bubbles
 	if(!calcBubbleDifference(curr_bubble.center.pose, band[bubble_num-1].center.pose, difference1))
@@ -1591,19 +1593,19 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 	PoseToPose2D(Bub.center.pose, Bub_pose2D);
 
 	float addForce_fac = ackermann_force_gain_*turning_radius_;
-	float dist_to_goal = PointDistance(band.at(0).center.pose.position,band.at((int) band.size()-1).center.pose.position);
-	if (dist_to_goal < 1.2)
+	float dist_to_goal = getDistance2d(band.at(0).center.pose.position,band.at((int) band.size()-1).center.pose.position);
+	if (dist_to_goal < 1.2 && near_obstacle_)
 		addForce_fac = 0;
 	float startfaktor = addForce_fac;
 	float endfaktor = addForce_fac;
 	if(bubble_num == 1) startfaktor *= 1.0;
-	if(bubble_num == ((int) band.size() - 2)) endfaktor *= 0.0;
+	if(bubble_num == ((int) band.size() - 2)) endfaktor *= 1.0;
 
 	double fx = 0;
 	double fy = 0;
 	double tz = 0;
 	
-	double distLR = PointDistance(Bub_p.L, Bub.R);
+	double distLR = getDistance2d(Bub_p.L, Bub.R);
 	if(distLR < 2*turning_radius_)
 	{
 		if(distLR < tiny_bubble_distance_) distLR = tiny_bubble_distance_;
@@ -1613,7 +1615,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 		tz += (Bub.R.x-Bub.L.x)/2.0*fy-(Bub.R.y-Bub.L.y)/2.0*fx;
 	}
 	
-	distLR = PointDistance(Bub_n.L, Bub.R);
+	distLR = getDistance2d(Bub_n.L, Bub.R);
 	if(distLR < 2*turning_radius_)
 	{
 		if(distLR < tiny_bubble_distance_) distLR = tiny_bubble_distance_;
@@ -1623,7 +1625,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 		tz += (Bub.R.x-Bub.L.x)/2.0*fy-(Bub.R.y-Bub.L.y)/2.0*fx;
 	}
 	
-	distLR = PointDistance(Bub_p.R, Bub.L);
+	distLR = getDistance2d(Bub_p.R, Bub.L);
 	if(distLR < 2*turning_radius_)
 	{
 		if(distLR < tiny_bubble_distance_) distLR = tiny_bubble_distance_;	
@@ -1633,7 +1635,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 		tz += (Bub.L.x-Bub.R.x)/2.0*fy-(Bub.L.y-Bub.R.y)/2.0*fx;
 	}
 	
-	distLR = PointDistance(Bub_n.R, Bub.L);
+	distLR = getDistance2d(Bub_n.R, Bub.L);
 	if(distLR < 2*turning_radius_)
 	{
 		if(distLR < tiny_bubble_distance_) distLR = tiny_bubble_distance_;
@@ -1863,6 +1865,9 @@ bool EBandPlanner::calcExternalForces(int bubble_num, Bubble curr_bubble, geomet
 
 	// assign wrench to forces vector
 	forces.wrench = wrench;
+	
+	if (wrench.force.x != 0 || wrench.force.y != 0 || wrench.torque.z != 0)
+		near_obstacle_ = true;
 
 	return true;
 }
@@ -1998,8 +2003,8 @@ bool EBandPlanner::interpolateBubblesCarlike(Bubble start_bubble, Bubble end_bub
 	double theta_b;
 	
 	// figure out shortest way
-	double dist_RR = PointDistance(start_bubble.R,end_bubble.R);
-	double dist_LL = PointDistance(start_bubble.L,end_bubble.L);
+	double dist_RR = getDistance2d(start_bubble.R,end_bubble.R);
+	double dist_LL = getDistance2d(start_bubble.L,end_bubble.L);
 	double stct = 1e-3;	// same turning circle threshold
 	
 	// angle difference between orientation of the vector connecting the two centers and the start or end orientation, respectively.
@@ -2149,11 +2154,11 @@ bool EBandPlanner::checkOverlap(Bubble bubble1, Bubble bubble2)
 		bubble2.setBubbleparameters(turning_radius_,center_ax_dist_);
 		
 		// check whether two turning circles overlap
-		double distLR = PointDistance(bubble1.L,bubble2.R);
+		double distLR = getDistance2d(bubble1.L,bubble2.R);
 		if(distLR < 2.0*turning_radius_ * overlap_tolerance_)
 			return false;
 		
-		distLR = PointDistance(bubble1.R,bubble2.L);
+		distLR = getDistance2d(bubble1.R,bubble2.L);
 		if(distLR < 2.0*turning_radius_  * overlap_tolerance_)
 			return false;
 	}
@@ -2161,13 +2166,6 @@ bool EBandPlanner::checkOverlap(Bubble bubble1, Bubble bubble2)
 	// everything fine - bubbles overlap
 	return true;
 }
-
-
-double EBandPlanner::PointDistance(geometry_msgs::Point start_point, geometry_msgs::Point end_point)
-{
-	return sqrt((end_point.x-start_point.x) * (end_point.x-start_point.x) + (end_point.y-start_point.y) * (end_point.y-start_point.y));
-}
-
 
 bool EBandPlanner::calcBubbleDistance(geometry_msgs::Pose start_center_pose, geometry_msgs::Pose end_center_pose, double& distance)
 {

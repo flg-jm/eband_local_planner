@@ -68,8 +68,6 @@ void EBandTrajectoryCtrl::configure_callback(eband_local_planner::EBandLocalPlan
 	max_vel_lin_ = config.max_vel_lin;
 	max_vel_th_ = config.max_vel_th;
 
-	in_place_trans_vel_ = config.in_place_trans_vel;
-
 	tolerance_trans_ = config.xy_goal_tolerance;
 	tolerance_rot_ = config.yaw_goal_tolerance;
 	tolerance_timeout_ = config.tolerance_timeout;
@@ -172,12 +170,12 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 		start_position_counter_ = 0;
 
 		// Initialize the collision velocity filter
-		cvf_ = boost::shared_ptr<CollisionVelocityFilter>(new CollisionVelocityFilter(virt_mass_, costmap_ros));
+		cvf_ = boost::shared_ptr<CollisionVelocityFilter>(new CollisionVelocityFilter(costmap_ros));
 				
 		// tolerance should depend on turning radius
 			tolerance_trans_ *= (1+turning_radius_);
 			degrees_ = 0;
-			
+			factor_ = 1.1;
 
 		// init velocity for interpolation
 		last_vel_.linear.x = 0.0;
@@ -643,7 +641,7 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	
 	// FILTER
 	//ROS_WARN("Twist vor Filter: (%f, %f, %f)",robot_cmd.linear.x,robot_cmd.linear.y,robot_cmd.angular.z);
-	cvf_->filterVelocity(v_max_, robot_cmd);
+	cvf_->filterVelocity(robot_cmd);
 	//ROS_WARN("Twist nach Filter: (%f, %f, %f)",robot_cmd.linear.x,robot_cmd.linear.y,robot_cmd.angular.z);		
 		
 	// if Ackermann cinematics is desired check again the twist to hold the constraints
@@ -671,6 +669,8 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 
 bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviation, double dist_to_goal)
 {
+	v_max_ = cvf_->getMaximumVelocity();
+	
 	geometry_msgs::Twist cdev;
 	cdev = control_deviation;
 
@@ -693,7 +693,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		degrees_ = 0;
 		angle_correction_ = true;
 		if (fabs(last_vel_.linear.x) > 0.001)
-			forward_ = last_vel_.linear.x/fabs(last_vel_.linear.x);
+			forward_ = sign(last_vel_.linear.x);
 		else
 			forward_ = 1;
 	}
@@ -702,9 +702,10 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			degrees_ = 0;
 			forward_ *= -1.0;
 	}
-	if(fabs(H2.x-H1.x) > 1.2*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_)
+	if(fabs(H2.x-H1.x) > factor_*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_)
 	{
 		angle_correction_ = false;
+		factor_ = 1.1;
 	}
 	
 	// Y correction
@@ -715,7 +716,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		y_correction_ = true;
 		angle_correction_ = false;		
 		if (fabs(last_vel_.linear.x) > 0.001)
-			forward_ = last_vel_.linear.x/fabs(last_vel_.linear.x);
+			forward_ = sign(last_vel_.linear.x);
 		else
 			forward_ = -1;
 	}
@@ -730,7 +731,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	}
 		
 	
-	double dist_to_next_pose = sqrt((H2.x-H1.x)*(H2.x-H1.x)+(H2.y-H1.y)*(H2.y-H1.y));
+	double dist_to_next_pose = getDistance2d(H1,H2);
 	//if ((dist_to_next_pose < tolerance_trans_ || !checkReachability(H1,H2, cdev.angular.z)) && !y_correction_)
 	//if (!checkReachability(H1,H2, cdev.angular.z) && !y_correction_ && dist_to_goal > 2*turning_radius_)
 	
@@ -738,14 +739,14 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	{
 		ROS_WARN("y correction");
 		degrees_ ++;
-		cdev.angular.z = forward_*turning*0.15*cdev.linear.y/fabs(cdev.linear.y);
+		cdev.angular.z = forward_*turning*0.15*sign(cdev.linear.y);
 		cdev.linear.x = forward_*fabs(cdev.angular.z)*turning_radius_;
 	}
 	else if (angle_correction_)
 	{
 		ROS_WARN("Angle correction");
 		degrees_ ++;
-		cdev.angular.z = 0.2*angle/fabs(angle);
+		cdev.angular.z = 0.2*sign(angle);
 		cdev.linear.x = forward_*turning_radius_*fabs(cdev.angular.z);
 	}
 	else if (dist_to_goal < 1*tolerance_trans_)
@@ -829,7 +830,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 				//korrektur = false;
 		}*/
 			
-		double a = 0.5;
+		double a = 0.2;
 		//if (arclength < 0.0)
 			//a *= 2;
 		
@@ -875,13 +876,16 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		}
 		
 		if (fabs(kr) > 1.0/turning_radius_)
-			kr *= 1.0/fabs(kr)/turning_radius_;
+			kr = sign(kr)/turning_radius_;
 		
 		cdev.linear.x = arclength;
 		cdev.angular.z = angles::normalize_angle(arclength*kr);
 		
-		//if (v_max_ < 0.1)
-			//cdev.linear.x *= -1;
+		if (v_max_ < 0.01)
+		{
+			angle_correction_ = true;
+			factor_ = 1.5;
+		}
 	}
 	
 	cdev.linear.y = cdev.angular.z * center_ax_dist_;

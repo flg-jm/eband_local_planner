@@ -106,6 +106,18 @@ bool transformGlobalPlan(const tf::TransformListener& tf, const std::vector<geom
 							const costmap_2d::Costmap2DROS& costmap, const std::string& global_frame, 
 							std::vector<geometry_msgs::PoseStamped>& transformed_plan, std::vector<int>& start_end_counts_from_end);
 
+/**
+ * @brief  returns the sign of x
+ */
+double sign(double x);
+
+/**
+ * @brief  computes distance between two points
+ * @param  a,b - Points
+ * @return distance
+ */
+double getDistance2d(geometry_msgs::Point a, geometry_msgs::Point b);
+    
 };
 #endif
 

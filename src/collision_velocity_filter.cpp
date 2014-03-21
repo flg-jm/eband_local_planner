@@ -52,7 +52,7 @@
 namespace eband_local_planner{
 	
 // Constructor
-CollisionVelocityFilter::CollisionVelocityFilter(double virt_mass, costmap_2d::Costmap2DROS* costmap_ros)
+CollisionVelocityFilter::CollisionVelocityFilter(costmap_2d::Costmap2DROS* costmap_ros)
 {
   // create node handle
   nh_ = ros::NodeHandle("~");
@@ -61,7 +61,7 @@ CollisionVelocityFilter::CollisionVelocityFilter(double virt_mass, costmap_2d::C
   
   // node handle to get footprint from parameter server
   std::string costmap_parameter_source;
-  if(!nh_.hasParam("costmap_parameter_source")) ROS_WARN("Checking default source [/local_costmap_node/costmap] for costmap parameters");
+  //if(!nh_.hasParam("costmap_parameter_source")) ROS_WARN("Checking default source [/local_costmap_node/costmap] for costmap parameters");
   nh_.param("costmap_parameter_source",costmap_parameter_source, std::string("/local_costmap_node/costmap"));
 
   ros::NodeHandle local_costmap_nh_(costmap_parameter_source); 	
@@ -78,38 +78,30 @@ CollisionVelocityFilter::CollisionVelocityFilter(double virt_mass, costmap_2d::C
 
   // read parameters from parameter server
   // parameters from costmap
-  if(!local_costmap_nh_.hasParam(costmap_parameter_source+"/global_frame")) ROS_WARN("Used default parameter for global_frame [/base_link]");
+  //if(!local_costmap_nh_.hasParam(costmap_parameter_source+"/global_frame")) ROS_WARN("Used default parameter for global_frame [/base_link]");
   local_costmap_nh_.param(costmap_parameter_source+"/global_frame", global_frame_, std::string("/base_link"));
 
-  if(!local_costmap_nh_.hasParam(costmap_parameter_source+"/robot_base_frame")) ROS_WARN("Used default parameter for robot_frame [/base_link]");
+  //if(!local_costmap_nh_.hasParam(costmap_parameter_source+"/robot_base_frame")) ROS_WARN("Used default parameter for robot_frame [/base_link]");
   local_costmap_nh_.param(costmap_parameter_source+"/robot_base_frame", robot_frame_, std::string("/base_link"));
 
-  if(!nh_.hasParam("influence_radius")) ROS_WARN("Used default parameter for influence_radius [1.5 m]");
+  //if(!nh_.hasParam("influence_radius")) ROS_WARN("Used default parameter for influence_radius [1.5 m]");
   nh_.param("influence_radius", influence_radius_, 1.5);
   closest_obstacle_dist_ = influence_radius_;
   closest_obstacle_angle_ = 0.0;
 
   // parameters for obstacle avoidence and velocity adjustment
-  if(!nh_.hasParam("stop_threshold")) ROS_WARN("Used default parameter for stop_threshold [0.1 m]");
+  //if(!nh_.hasParam("stop_threshold")) ROS_WARN("Used default parameter for stop_threshold [0.1 m]");
   nh_.param("stop_threshold", stop_threshold_, 0.08);
 
-  if(!nh_.hasParam("obstacle_damping_dist")) ROS_WARN("Used default parameter for obstacle_damping_dist [5.0 m]");
+  //if(!nh_.hasParam("obstacle_damping_dist")) ROS_WARN("Used default parameter for obstacle_damping_dist [5.0 m]");
   nh_.param("obstacle_damping_dist", obstacle_damping_dist_, 7.0);
   if(obstacle_damping_dist_ <= stop_threshold_) {
     obstacle_damping_dist_ = stop_threshold_ + 0.01; // set to stop_threshold_+0.01 to avoid divide by zero error
     ROS_WARN("obstacle_damping_dist <= stop_threshold -> robot will stop without decceleration!");
   }
 
-  if(!nh_.hasParam("use_circumscribed_threshold")) ROS_WARN("Used default parameter for use_circumscribed_threshold_ [0.2 rad/s]");
+  //if(!nh_.hasParam("use_circumscribed_threshold")) ROS_WARN("Used default parameter for use_circumscribed_threshold_ [0.2 rad/s]");
   nh_.param("use_circumscribed_threshold", use_circumscribed_threshold_, 0.20);
-
-  if(!nh_.hasParam("pot_ctrl_kv")) ROS_WARN("Used default parameter for pot_ctrl_kv [1.0]");
-  nh_.param("pot_ctrl_kv", kv_, 3.5);
-
-  if(!nh_.hasParam("pot_ctrl_kp")) ROS_WARN("Used default parameter for pot_ctrl_kp [2.0]");
-  nh_.param("pot_ctrl_kp", kp_, 4.0);
-
-  virt_mass_ = virt_mass;
 
 }
 
@@ -117,9 +109,8 @@ CollisionVelocityFilter::CollisionVelocityFilter(double virt_mass, costmap_2d::C
 CollisionVelocityFilter::~CollisionVelocityFilter(){}
 
 // joystick_velocityCB reads twist command from joystick
-void CollisionVelocityFilter::filterVelocity(double& v_max, geometry_msgs::Twist& desired_vel)
+void CollisionVelocityFilter::filterVelocity(geometry_msgs::Twist& desired_vel)
 {
-  //v_max_ = v_max;
 
   pthread_mutex_lock(&m_mutex);
 
@@ -146,7 +137,6 @@ void CollisionVelocityFilter::filterVelocity(double& v_max, geometry_msgs::Twist
   	//ROS_ERROR("Closestobstacle: (dist,angle) = (%f,%f)",closest_obstacle_dist_,closest_obstacle_angle_);
 	ROS_ERROR("Vmax = %f",v_max_);
 	desired_vel = last_vel_;
-	v_max = v_max_;
 }
 
 void CollisionVelocityFilter::setFootprint(costmap_2d::Costmap2DROS* costmap_ros)
@@ -428,17 +418,16 @@ void CollisionVelocityFilter::obstacleHandler()
   }
   pthread_mutex_unlock(&m_mutex);
 }
-
-
-double CollisionVelocityFilter::getDistance2d(geometry_msgs::Point a, geometry_msgs::Point b) 
+   
+double CollisionVelocityFilter::getMaximumVelocity()
 {
-  return sqrt( pow(a.x - b.x,2) + pow(a.y - b.y,2) );
+	return v_max_;
 }
-
-double CollisionVelocityFilter::sign(double x) 
+    
+void CollisionVelocityFilter::getClosestObstacle(double& closest_obstacle_dist, double& closest_obstacle_angle)
 {
-  if(x >= 0.0f) return 1.0f;
-  else return -1.0f;
+	closest_obstacle_dist = closest_obstacle_dist_;
+	closest_obstacle_angle = closest_obstacle_angle_;
 }
 
 bool CollisionVelocityFilter::obstacleValid(double x_obstacle, double y_obstacle) 

@@ -174,6 +174,7 @@ class EBandPlanner{
 		double fill_tol_; // gap is just filled if this tolerance is trespassed
 		double remove_tol_; // bubble will be removed if this tolerance is trespassed
 		bool interpolate_carlike_; // this flag controls the function for Bubble interpolation (interpolateBubbles or interpolateBubblesCarlike)
+		bool near_obstacle_; // this flag controls the function for Bubble interpolation (interpolateBubbles or interpolateBubblesCarlike)
 
 		// pointer to locally created objects (delete - except for smart-ptrs:)
 		base_local_planner::CostmapModel* world_model_; // local world model

@@ -226,5 +226,15 @@ bool transformGlobalPlan(const tf::TransformListener& tf, const std::vector<geom
 	return true;
 }
 
+double sign(double x) 
+{
+  if(x >= 0.0f) return 1.0f;
+  else return -1.0f;
+}
+
+double getDistance2d(geometry_msgs::Point a, geometry_msgs::Point b) 
+{
+  return sqrt((a.x - b.x)*(a.x - b.x) + (a.y - b.y)*(a.y - b.y));
+}
 
 }
