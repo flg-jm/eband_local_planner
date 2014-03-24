@@ -48,11 +48,11 @@ using std::max;
 EBandTrajectoryCtrl::EBandTrajectoryCtrl() : costmap_ros_(NULL), initialized_(false), band_set_(false), visualization_(false) {}
 
 
-EBandTrajectoryCtrl::EBandTrajectoryCtrl(std::string name, costmap_2d::Costmap2DROS* costmap_ros)
+EBandTrajectoryCtrl::EBandTrajectoryCtrl(std::string name, costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist)
   : costmap_ros_(NULL), initialized_(false), band_set_(false), visualization_(false)
 {
 	// initialize planner
-	initialize(name, costmap_ros);
+	initialize(name, costmap_ros, center_ax_dist);
 
   // Initialize pid object (note we'll be further clamping its output)
   // TODO See #1, #2
@@ -88,7 +88,7 @@ void EBandTrajectoryCtrl::configure_callback(eband_local_planner::EBandLocalPlan
 }
 
 
-void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros)
+void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist)
 {
 
 	// check if trajectory controller is already initialized
@@ -107,31 +107,7 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 
 
 		// requirements for ackermann cinematics
-		node_private.param("center_ax_dist", center_ax_dist_, 0.228);
-		
-		// get distance between robot center and rear axle
-		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
-		tf::TransformListener listener;
-		tf::StampedTransform transform;
-		bool waitfortransform = true;
-		int trial_count = 0;
-		while(ros::ok() && waitfortransform && trial_count < 5)
-		{
-			waitfortransform = false;
-			ros::Duration(0.1).sleep();
-			try {
-				listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
-				// just the x-component of the transform is needed
-				center_ax_dist_ = fabs(transform.getOrigin().x());
-			} catch (tf::TransformException ex) {
-				ROS_ERROR("%s",ex.what());
-				waitfortransform = true;
-			}
-			trial_count++;
-		}
-		if(waitfortransform)
-			ROS_WARN("Could not get the distance between center and rear axle by transform listener. Default value: %f", center_ax_dist_);
-			
+		center_ax_dist_ = center_ax_dist;
 		node_private.param("max_steering_angle", max_steering_angle_, 0.7);
 		turning_radius_ = 2*center_ax_dist_/tan(max_steering_angle_);
 
@@ -170,7 +146,7 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 		start_position_counter_ = 0;
 
 		// Initialize the collision velocity filter
-		cvf_ = boost::shared_ptr<CollisionVelocityFilter>(new CollisionVelocityFilter(costmap_ros));
+		cvf_ = boost::shared_ptr<CollisionVelocityFilter>(new CollisionVelocityFilter(costmap_ros, center_ax_dist));
 				
 		// tolerance should depend on turning radius
 			tolerance_trans_ *= (1+turning_radius_);
@@ -670,6 +646,8 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviation, double dist_to_goal)
 {
 	v_max_ = cvf_->getMaximumVelocity();
+	double obstacle_dist, obstacle_angle;
+	cvf_->getClosestObstacle(obstacle_dist, obstacle_angle);
 	
 	geometry_msgs::Twist cdev;
 	cdev = control_deviation;
@@ -688,7 +666,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		//angle = theta_reachable;
 	
 	// Angle correction
-	if(fabs(H2.x-H1.x) < 0.8*turning_radius_*fabs(angle) && !angle_correction_ && !y_correction_)
+	if(fabs(H2.x-H1.x) < 0.9*turning_radius_*fabs(angle) && !angle_correction_ && !y_correction_)
 	{
 		degrees_ = 0;
 		angle_correction_ = true;
@@ -702,27 +680,33 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			degrees_ = 0;
 			forward_ *= -1.0;
 	}
-	if(fabs(H2.x-H1.x) > factor_*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_)
+	if((fabs(H2.x-H1.x) > 1.1*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_) && !stuck_)
+	//if((fabs(H2.x-H1.x) > factor_*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_ ))
 	{
 		angle_correction_ = false;
-		factor_ = 1.1;
+	}
+	
+	if (obstacle_dist > 0.3)
+	{
+		stuck_ = false;
 	}
 	
 	// Y correction
 	float turning = 1;
-	if (fabs(cdev.linear.x) <= tolerance_trans_ && fabs(cdev.linear.y) > tolerance_trans_ && fabs(cdev.angular.z) <= tolerance_rot_ && !y_correction_ && (elastic_band_.size() == 2 || dist_to_goal < center_ax_dist_) && fabs(last_vel_.linear.x) < 0.03)
+	if (fabs(cdev.linear.x) <= tolerance_trans_ && fabs(cdev.linear.y) > tolerance_trans_ && fabs(cdev.angular.z) <= tolerance_rot_ && !y_correction_ && fabs(last_vel_.linear.x) < 0.1)
 	{
 		degrees_ = 0;
+		obst_dist_at_start_ = obstacle_dist;
 		y_correction_ = true;
-		angle_correction_ = false;		
+		angle_correction_ = false;
 		if (fabs(last_vel_.linear.x) > 0.001)
 			forward_ = sign(last_vel_.linear.x);
 		else
 			forward_ = -1;
 	}
-	else if(y_correction_ && ( (degrees_ >= 15 && v_max_ < 0.22) || degrees_ >= 25) )
+	//else if(y_correction_ && ( (degrees_ >= 15 && v_max_ < 0.22) || degrees_ >= 25) )
+	else if(y_correction_ && ( obstacle_dist < 0.65*obst_dist_at_start_ || degrees_ >= 25) )
 	{
-		ROS_WARN("Umdrehen");
 		turning = -1;
 	}
 	if(y_correction_ && (degrees_ >= 50 || v_max_ < 0.001))
@@ -760,6 +744,12 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 				cdev.linear.x *= turning_radius_*fabs(cdev.angular.z/cdev.linear.x);
 		}
 	}
+	else if (v_max_ < 0.001)
+	{
+		angle_correction_ = true;
+		stuck_ = true;
+		forward_ = 1;
+	}
 	else
 	{	
 		double theta_reachable = angles::normalize_angle(2*atan((H2.y-H1.y)/(H2.x-H1.x)));	
@@ -776,13 +766,9 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			kr = theta_reachable/arclength;
 			radius = (H2.x-H1.x)/sin(0.001);
 		}
-		bool rechts;
-		bool korrektur = false;
 		
-		/*if (fabs(theta_reachable - cdev.angular.z) > tolerance_rot_ && !y_correction_)
+		/*if (fabs(theta_reachable - cdev.angular.z) > tolerance_rot_)
 		{
-			//ROS_ERROR("Korrektur");
-			korrektur = true;
 			geometry_msgs::Point L, R;
 			double turn_rad = 1.2*turning_radius_;
 			L.x = H2.x - turning_radius_*sin(cdev.angular.z);
@@ -819,20 +805,14 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			if ((fabs(arclength_R) < fabs(arclength_L)) && arclength*arclength_R > 0)
 			{
 				kr = alpha_R/arclength_R;
-				rechts = true;
 			}
 			else
 			{
 				kr = alpha_L/arclength_L;
-				rechts = false;
 			}
-			//if (fabs(kr) > 1.0/turning_radius_)
-				//korrektur = false;
 		}*/
 			
-		double a = 0.2;
-		//if (arclength < 0.0)
-			//a *= 2;
+		double a = 0.1;
 		
 		if (dist_to_goal < 1.0)
 			a = 0.3;
@@ -857,19 +837,10 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			ROS_ERROR("Hat nicht gereicht");
 		*/	
 		//if(!korrektur)
-			//kr = theta_reachable/arclength;
+			kr = theta_reachable/arclength;
 		
-		/*if (fabs(kr) > 0.8/turning_radius_ && !reverse_)
-		{
-			reverse_ = true;
-			turning_ = -kr;
-		}
-		if (fabs(kr) < 1.2/turning_radius_ && reverse_)
-			reverse_ = false;
-		if (reverse_)
-			kr = turning_;
-		*/
-		if (fabs(radius) < 1.2*turning_radius_)
+		
+		if (fabs(radius) < 1.1*turning_radius_)
 		{
 			ROS_WARN("Gib alles");
 			kr = 1/radius;
@@ -881,11 +852,6 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		cdev.linear.x = arclength;
 		cdev.angular.z = angles::normalize_angle(arclength*kr);
 		
-		if (v_max_ < 0.01)
-		{
-			angle_correction_ = true;
-			factor_ = 1.5;
-		}
 	}
 	
 	cdev.linear.y = cdev.angular.z * center_ax_dist_;

@@ -95,14 +95,41 @@ void EBandPlannerROS::initialize(std::string name, tf::TransformListener* tf, co
 		// subscribe to topics (to get odometry information, we need to get a handle to the topic in the global namespace)
 		ros::NodeHandle gn;
 		odom_sub_ = gn.subscribe<nav_msgs::Odometry>("odom", 1, boost::bind(&EBandPlannerROS::odomCallback, this, _1));
+		
+
+		pn.param("center_ax_dist", center_ax_dist_, 0.34);
+		// get distance between robot center and rear axle
+		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
+		tf::TransformListener listener;
+		tf::StampedTransform transform;
+		bool waitfortransform = true;
+		int trial_count = 0;
+		while(ros::ok() && waitfortransform && trial_count < 5)
+		{
+			waitfortransform = false;
+			ros::Duration(0.1).sleep();
+			try {
+				listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
+				// just the x-component of the transform is needed
+				center_ax_dist_ = fabs(transform.getOrigin().x());
+			} catch (tf::TransformException ex) {
+				ROS_ERROR("%s",ex.what());
+				waitfortransform = true;
+			}
+			trial_count++;
+		}
+		if(waitfortransform)
+		{
+			ROS_WARN("Could not get the distance between center and rear axle by transform listener. Default value: %f", center_ax_dist_);
+		}
 
 
 		// create the actual planner that we'll use. Pass Name of plugin and pointer to global costmap to it.
 		// (configuration is done via parameter server)
-		eband_ = boost::shared_ptr<EBandPlanner>(new EBandPlanner(name, costmap_ros_));
+		eband_ = boost::shared_ptr<EBandPlanner>(new EBandPlanner(name, costmap_ros_, center_ax_dist_));
 
 		// create the according controller
-		eband_trj_ctrl_ = boost::shared_ptr<EBandTrajectoryCtrl>(new EBandTrajectoryCtrl(name, costmap_ros_));
+		eband_trj_ctrl_ = boost::shared_ptr<EBandTrajectoryCtrl>(new EBandTrajectoryCtrl(name, costmap_ros_, center_ax_dist_));
 
 		// create object for visualization
 		eband_visual_ = boost::shared_ptr<EBandVisualization>(new EBandVisualization);

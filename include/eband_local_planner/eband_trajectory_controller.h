@@ -90,7 +90,7 @@ class EBandTrajectoryCtrl{
 		 * @param name The name to give this instance of the elastic band local planner
 		 * @param costmap The cost map to use for assigning costs to trajectories
 		 */
-		EBandTrajectoryCtrl(std::string name, costmap_2d::Costmap2DROS* costmap_ros);
+		EBandTrajectoryCtrl(std::string name, costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist);
 
 		/**
 		 * @brief  Destructor
@@ -102,7 +102,7 @@ class EBandTrajectoryCtrl{
 		 * @param name The name to give this instance of the trajectory planner
 		 * @param costmap The cost map to use for assigning costs to trajectories
 		 */
-		void initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros);
+		void initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist);
 
 
 		/**
@@ -144,8 +144,8 @@ class EBandTrajectoryCtrl{
     control_toolbox::Pid pid_;
 
 		// parameters
-    double forward_, degrees_, v_max_;
-    bool y_correction_,angle_correction_,factor_;
+    double forward_, degrees_, v_max_, obst_dist_at_start_, factor_;
+    bool y_correction_,angle_correction_, stuck_;
     double max_steering_angle_; // the maximal steering angle for ackermann-cinematics
     double turning_radius_; // the minimal turning radius for ackermann-cinematics
     double center_ax_dist_; // distance from robot center to axles	

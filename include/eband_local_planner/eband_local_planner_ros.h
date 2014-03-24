@@ -139,7 +139,8 @@ class EBandPlannerROS : public nav_core::BaseLocalPlanner{
 		// parameters
 		double yaw_goal_tolerance_, xy_goal_tolerance_; ///<@brief parameters to define region in which goal is treated as reached
 		double rot_stopped_vel_, trans_stopped_vel_; ///<@brief lower bound for absolute value of velocity (with respect to stick-slip behaviour)
-
+		double center_ax_dist_; ///<@brief distance between center and rear axle of robot
+		
 		// Topics & Services
 		ros::Publisher g_plan_pub_; ///<@brief publishes modified global plan
 		ros::Publisher l_plan_pub_; ///<@brief publishes prediction for local commands

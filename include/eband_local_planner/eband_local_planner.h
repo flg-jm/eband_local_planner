@@ -62,7 +62,6 @@
 // transforms
 #include <angles/angles.h>
 #include <tf/tf.h>
-#include <tf/transform_listener.h>
 
 // costmap & geometry
 #include <costmap_2d/costmap_2d_ros.h>
@@ -89,7 +88,7 @@ class EBandPlanner{
 		 * @param name The name to give this instance of the elastic band local planner
 		 * @param costmap The cost map to use for assigning costs to trajectories
 		 */
-		EBandPlanner(std::string name, costmap_2d::Costmap2DROS* costmap_ros);
+		EBandPlanner(std::string name, costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist);
 
 		/**
 		 * @brief  Destructor
@@ -101,7 +100,7 @@ class EBandPlanner{
 		 * @param name The name to give this instance of the trajectory planner
 		 * @param costmap The cost map to use for assigning costs to trajectories
 		 */
-		void initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros);
+		void initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist);
 
 		/**
 		 * @brief passes a reference to the eband visualization object which can be used to visualize the band optimization

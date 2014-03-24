@@ -93,7 +93,7 @@ class CollisionVelocityFilter
     ///
     CollisionVelocityFilter();
 
-    CollisionVelocityFilter(costmap_2d::Costmap2DROS* costmap_ros);
+    CollisionVelocityFilter(costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist);
     
     ///
     /// @brief  Destructor
@@ -151,7 +151,7 @@ class CollisionVelocityFilter
     /// @brief  checks distance to obstacles in driving direction and slows down/stops 
     ///         robot and publishes command velocity to robot
     ///
-    void performControllerStep();
+    void performControllerStep(bool obstacle_on_side);
     
     ///
     /// @brief  checks for obstacles in driving direction of the robot (rotation included) 
@@ -169,7 +169,7 @@ class CollisionVelocityFilter
     /// @return true if obstacle outside of footprint
     ///
     bool obstacleValid(double x_obstacle, double y_obstacle);
-
+    bool obstacleValidCircum(double x_obstacle, double y_obstacle);
 
     pthread_mutex_t m_mutex;
 
@@ -188,6 +188,8 @@ class CollisionVelocityFilter
     double influence_radius_, stop_threshold_, obstacle_damping_dist_, use_circumscribed_threshold_;
     double closest_obstacle_dist_, closest_obstacle_angle_;
 
+	double center_ax_dist_;
+	
     // variables for slow down behaviour
     double v_max_;
 

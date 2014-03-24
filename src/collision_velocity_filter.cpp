@@ -52,7 +52,7 @@
 namespace eband_local_planner{
 	
 // Constructor
-CollisionVelocityFilter::CollisionVelocityFilter(costmap_2d::Costmap2DROS* costmap_ros)
+CollisionVelocityFilter::CollisionVelocityFilter(costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist)
 {
   // create node handle
   nh_ = ros::NodeHandle("~");
@@ -68,6 +68,8 @@ CollisionVelocityFilter::CollisionVelocityFilter(costmap_2d::Costmap2DROS* costm
 
   // get footprint of the robot from costmap
   setFootprint(costmap_ros);
+  
+  center_ax_dist_ = center_ax_dist;
   
   // implementation of topics to publish (command for base and list of relevant obstacles)
   topic_pub_command_ = nh_.advertise<geometry_msgs::Twist>("command", 1);
@@ -129,11 +131,11 @@ void CollisionVelocityFilter::filterVelocity(geometry_msgs::Twist& desired_vel)
     last_vel_.angular.z = 0;
     v_max_ = 0;
   }
-  else
-  {
+  //else
+  //{
 	// adjust velocity if we are about to run in an obstacle
-	performControllerStep();
-  }
+	//performControllerStep();
+  //}
   	//ROS_ERROR("Closestobstacle: (dist,angle) = (%f,%f)",closest_obstacle_dist_,closest_obstacle_angle_);
 	ROS_ERROR("Vmax = %f",v_max_);
 	desired_vel = last_vel_;
@@ -176,7 +178,7 @@ void CollisionVelocityFilter::obstaclesCB(const nav_msgs::GridCells::ConstPtr &o
 
 
 // sets corrected velocity of joystick command
-void CollisionVelocityFilter::performControllerStep() 
+void CollisionVelocityFilter::performControllerStep(bool obstacle_on_side) 
 {
 
   double vx_max, vy_max;
@@ -226,7 +228,7 @@ void CollisionVelocityFilter::performControllerStep()
   
 
   }*/
-  double acc_max = 0.15;
+  double acc_max = 0.1;
   v_max_ = sqrt(2.0 * (closest_obstacle_dist_-stop_threshold_) * acc_max);
   if(closest_obstacle_dist_ < influence_radius_) 
   {
@@ -235,9 +237,10 @@ void CollisionVelocityFilter::performControllerStep()
 	   if (abs_cmd_vel > v_max_)
 	   {
 		   double scale = v_max_/abs_cmd_vel;
-		   cmd_vel.linear.x *= scale;
 		   cmd_vel.linear.y *= scale;
 		   cmd_vel.angular.z *= scale;
+		  //if(!obstacle_on_side)
+		   cmd_vel.linear.x *= scale;
 	   }
   }
 	
@@ -248,7 +251,7 @@ void CollisionVelocityFilter::performControllerStep()
   return;
 }
 
-void CollisionVelocityFilter::obstacleHandler() 
+void CollisionVelocityFilter::obstacleHandler()
 {
   pthread_mutex_lock(&m_mutex);
   if(!costmap_received_) 
@@ -343,7 +346,7 @@ void CollisionVelocityFilter::obstacleHandler()
     {
       cur_obstacle_robot = last_costmap_received_.cells[i];
 
-	  if( obstacleValid(cur_obstacle_robot.x, cur_obstacle_robot.y) ) 
+	  if( obstacleValidCircum(cur_obstacle_robot.x, cur_obstacle_robot.y) ) 
       {
         cur_obstacle_relevant = true;
         relevant_obstacles_.cells.push_back(last_costmap_received_.cells[i]);
@@ -413,10 +416,17 @@ void CollisionVelocityFilter::obstacleHandler()
       {
         closest_obstacle_dist_ = cur_distance_to_border;
         closest_obstacle_angle_ = obstacle_theta_robot;
-      }
+      }      
     }	
   }
+  bool obstacle_on_side = false;
+  if((closest_obstacle_angle_ >= corner_front_left && closest_obstacle_angle_ < corner_rear_left) || (closest_obstacle_angle_ <= corner_front_right && closest_obstacle_angle_ > corner_rear_right))
+  {
+    obstacle_on_side = true;
+  }  
   pthread_mutex_unlock(&m_mutex);
+  
+  performControllerStep(obstacle_on_side);
 }
    
 double CollisionVelocityFilter::getMaximumVelocity()
@@ -426,7 +436,7 @@ double CollisionVelocityFilter::getMaximumVelocity()
     
 void CollisionVelocityFilter::getClosestObstacle(double& closest_obstacle_dist, double& closest_obstacle_angle)
 {
-	closest_obstacle_dist = closest_obstacle_dist_;
+	closest_obstacle_dist = closest_obstacle_dist_-stop_threshold_;
 	closest_obstacle_angle = closest_obstacle_angle_;
 }
 
@@ -440,14 +450,37 @@ bool CollisionVelocityFilter::obstacleValid(double x_obstacle, double y_obstacle
   
   // Don't consider obstacles which lie inside the current turning circle
   double radius = last_vel_.linear.x/last_vel_.angular.z;
-  double center_ax_dist = 0.228;
   double inner_radius;
   if (radius < 0)
 	inner_radius = radius - footprint_right_;
   else
 	inner_radius = radius - footprint_left_;
-  if((x_obstacle+center_ax_dist)*(x_obstacle+center_ax_dist) + (y_obstacle-radius)*(y_obstacle-radius) < inner_radius*inner_radius) 
+  if((x_obstacle+center_ax_dist_)*(x_obstacle+center_ax_dist_) + (y_obstacle-radius)*(y_obstacle-radius) < inner_radius*inner_radius) 
     return false;
+
+  return true;
+}
+bool CollisionVelocityFilter::obstacleValidCircum(double x_obstacle, double y_obstacle) 
+{
+  if(x_obstacle<footprint_front_ && x_obstacle>footprint_rear_ && y_obstacle>footprint_right_ && y_obstacle<footprint_left_) 
+  {
+    ROS_WARN("Found an obstacle inside robot_footprint: Skip!");
+    return false;
+  }
+  
+  // Don't consider obstacles which lie inside the current turning circle
+  double radius = last_vel_.linear.x/last_vel_.angular.z;
+  double inner_radius;
+  if (radius < 0)
+	inner_radius = radius - footprint_right_;
+  else
+	inner_radius = radius - footprint_left_;
+  if((x_obstacle+center_ax_dist_)*(x_obstacle+center_ax_dist_) + (y_obstacle-radius)*(y_obstacle-radius) < inner_radius*inner_radius) 
+    return false;
+  if(last_vel_.linear.x*radius < 0 && (x_obstacle+center_ax_dist_)*y_obstacle > 0)
+	return false;
+  if(last_vel_.linear.x*radius >= 0 && (x_obstacle+center_ax_dist_)*y_obstacle < 0)
+	return false;
 
   return true;
 }

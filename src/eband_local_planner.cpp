@@ -44,11 +44,11 @@ namespace eband_local_planner{
 EBandPlanner::EBandPlanner() : costmap_ros_(NULL), initialized_(false), carOverlap_(false) {}
 
 
-EBandPlanner::EBandPlanner(std::string name, costmap_2d::Costmap2DROS* costmap_ros)
+EBandPlanner::EBandPlanner(std::string name, costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist)
  : costmap_ros_(NULL), initialized_(false)
 {
 	// initialize planner
-	initialize(name, costmap_ros);
+	initialize(name, costmap_ros, center_ax_dist);
 }
 
 
@@ -58,7 +58,7 @@ EBandPlanner::~EBandPlanner()
 }
 
 
-void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros)
+void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros, double center_ax_dist)
 {
 	// check if the plugin is already initialized
 	if(!initialized_)
@@ -81,31 +81,7 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		// read parameters from parameter server
 		
 		// requirements for ackermann cinematics
-		pn.param("center_ax_dist", center_ax_dist_, 0.228);
-		
-		// get distance between robot center and rear axle
-		// this is done by listen to the transform from the frame /base_link to the frame /br_caster_r_wheel_link
-		tf::TransformListener listener;
-		tf::StampedTransform transform;
-		bool waitfortransform = true;
-		int trial_count = 0;
-		while(ros::ok() && waitfortransform && trial_count < 5)
-		{
-			waitfortransform = false;
-			ros::Duration(0.1).sleep();
-			try {
-				listener.lookupTransform("/base_link", "/br_caster_r_wheel_link", ros::Time(0), transform);
-				// just the x-component of the transform is needed
-				center_ax_dist_ = fabs(transform.getOrigin().x());
-			} catch (tf::TransformException ex) {
-				ROS_ERROR("%s",ex.what());
-				waitfortransform = true;
-			}
-			trial_count++;
-		}
-		if(waitfortransform)
-			ROS_WARN("Could not get the distance between center and rear axle by transform listener. Default value: %f", center_ax_dist_);
-			
+		center_ax_dist_ = center_ax_dist;	
 		pn.param("max_steering_angle", max_steering_angle_, 0.7);
 		turning_radius_ = 2*center_ax_dist_/tan(max_steering_angle_);
 		turning_radius_ *= 1.2; // the radius in planning is bigger than the actual radius, to have some latitude in the trajectory control
@@ -122,7 +98,7 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		pn.param("eband_tiny_bubble_expansion", tiny_bubble_expansion_, 0.01);
 
 		// optimization - force calculation
-		pn.param("eband_internal_force_gain", internal_force_gain_, 0.5);
+		pn.param("eband_internal_force_gain", internal_force_gain_, 1.0);
 		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 0.8);		
 		pn.param("eband_external_force_gain", external_force_gain_, 0.1);
 		pn.param("num_iterations_eband_optimization", num_optim_iterations_, 3);
@@ -1594,7 +1570,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 
 	float addForce_fac = ackermann_force_gain_*turning_radius_;
 	float dist_to_goal = getDistance2d(band.at(0).center.pose.position,band.at((int) band.size()-1).center.pose.position);
-	if (dist_to_goal < 1.2 && near_obstacle_)
+	if (dist_to_goal < 2.0 && near_obstacle_)
 		addForce_fac = 0;
 	float startfaktor = addForce_fac;
 	float endfaktor = addForce_fac;
