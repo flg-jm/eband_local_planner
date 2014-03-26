@@ -188,6 +188,9 @@ class CollisionVelocityFilter
     double influence_radius_, stop_threshold_, obstacle_damping_dist_, use_circumscribed_threshold_;
     double closest_obstacle_dist_, closest_obstacle_angle_;
 
+	// Cinematic parameters
+	double radius_;
+	geometry_msgs::Point center_of_rotation_;
 	double center_ax_dist_;
 	
     // variables for slow down behaviour

@@ -100,7 +100,7 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		// optimization - force calculation
 		pn.param("eband_internal_force_gain", internal_force_gain_, 1.0);
 		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 0.8);		
-		pn.param("eband_external_force_gain", external_force_gain_, 0.1);
+		pn.param("eband_external_force_gain", external_force_gain_, 0.05);
 		pn.param("num_iterations_eband_optimization", num_optim_iterations_, 3);
 
 		// recursive approximation of bubble equilibrium position based

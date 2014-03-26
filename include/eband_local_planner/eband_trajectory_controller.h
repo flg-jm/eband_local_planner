@@ -144,8 +144,8 @@ class EBandTrajectoryCtrl{
     control_toolbox::Pid pid_;
 
 		// parameters
-    double forward_, degrees_, v_max_, obst_dist_at_start_, factor_;
-    bool y_correction_,angle_correction_, stuck_;
+    double forward_, degrees_, v_max_, obst_dist_at_start_;
+    bool y_correction_,angle_correction_, stuck_, wait_;
     double max_steering_angle_; // the maximal steering angle for ackermann-cinematics
     double turning_radius_; // the minimal turning radius for ackermann-cinematics
     double center_ax_dist_; // distance from robot center to axles	
@@ -157,7 +157,7 @@ class EBandTrajectoryCtrl{
     double rotation_correction_threshold_; // We'll do rotation correction if we're at least this far from the goal
 
     bool smoothing_enabled_;
-    int start_position_counter_;
+    int start_position_counter_, wait_count_;
     int start_smoothing_border_;
     double stop_smoothing_dist_;
     

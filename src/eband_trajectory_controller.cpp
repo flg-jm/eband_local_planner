@@ -151,7 +151,8 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 		// tolerance should depend on turning radius
 			tolerance_trans_ *= (1+turning_radius_);
 			degrees_ = 0;
-			factor_ = 1.1;
+			wait_ = false;
+			
 
 		// init velocity for interpolation
 		last_vel_.linear.x = 0.0;
@@ -490,6 +491,11 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 		desired_velocity.linear.y *= scale_des_vel;
 	}
 	
+	// FILTER
+	//ROS_WARN("Twist vor Filter: (%f, %f, %f)",desired_velocity.linear.x,desired_velocity.linear.y,desired_velocity.angular.z);
+	cvf_->filterVelocity(desired_velocity);
+	//ROS_WARN("Twist nach Filter: (%f, %f, %f)",desired_velocity.linear.x,desired_velocity.linear.y,desired_velocity.angular.z);
+	
 	// calculate resulting force (accel. resp.) (Khatib86 - Realtime Obstacle Avoidance)
 	geometry_msgs::Twist acc_desired;
 	acc_desired = robot_cmd;
@@ -613,12 +619,7 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
                   break;
 		}
 	}
-	
-	
-	// FILTER
-	//ROS_WARN("Twist vor Filter: (%f, %f, %f)",robot_cmd.linear.x,robot_cmd.linear.y,robot_cmd.angular.z);
-	cvf_->filterVelocity(robot_cmd);
-	//ROS_WARN("Twist nach Filter: (%f, %f, %f)",robot_cmd.linear.x,robot_cmd.linear.y,robot_cmd.angular.z);		
+			
 		
 	// if Ackermann cinematics is desired check again the twist to hold the constraints
 	if (fabs(robot_cmd.linear.x) < fabs(robot_cmd.angular.z)*turning_radius_)
@@ -633,11 +634,41 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	twist_cmd = robot_cmd;
 	last_vel_ = robot_cmd;
 	
-	// in the case we are still in the correcting mode. turn it off when the goal is reached
+	if (fabs(last_vel_.linear.x) < 0.04 && !wait_)
+	{
+		wait_count_ = 0;
+		wait_ = true;
+	}
+	if (wait_)
+	{
+		wait_count_ ++;
+		if (fabs(last_vel_.linear.x) >= 0.05)
+		{
+			wait_ = false;
+			wait_count_ = 0;
+		}
+		
+	}
+	if (wait_count_/ctrl_freq_ > 2)
+	{
+		angle_correction_ = true;
+		stuck_ = true;
+		forward_ = 1;
+	}
+	if (wait_count_/ctrl_freq_ > 5)
+	{
+		goal_reached = true;
+		wait_ = false;
+		wait_count_ = 0;
+		ROS_WARN("I give it up to reach the goal.");
+	}
+	
+	// in the case we are still in the correction mode: turn it off if the goal is reached
 	if (goal_reached)
 	{
 		y_correction_ = false;
 		angle_correction_ = false;
+		tolerance_trans_ = 0.02*(1+turning_radius_);
 	}
 	
 	return true;
@@ -666,7 +697,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		//angle = theta_reachable;
 	
 	// Angle correction
-	if(fabs(H2.x-H1.x) < 0.9*turning_radius_*fabs(angle) && !angle_correction_ && !y_correction_)
+	if(fabs(H2.x-H1.x) < 0.8*turning_radius_*fabs(angle) && !angle_correction_ && !y_correction_)
 	{
 		degrees_ = 0;
 		angle_correction_ = true;
@@ -680,21 +711,21 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			degrees_ = 0;
 			forward_ *= -1.0;
 	}
-	if((fabs(H2.x-H1.x) > 1.1*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_) && !stuck_)
-	//if((fabs(H2.x-H1.x) > factor_*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_ ))
+	if((fabs(H2.x-H1.x) > 1.2*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_) && !stuck_)
 	{
 		angle_correction_ = false;
 	}
 	
-	if (obstacle_dist > 0.3)
+	if (obstacle_dist > 0.2)
 	{
 		stuck_ = false;
 	}
 	
 	// Y correction
 	float turning = 1;
-	if (fabs(cdev.linear.x) <= tolerance_trans_ && fabs(cdev.linear.y) > tolerance_trans_ && fabs(cdev.angular.z) <= tolerance_rot_ && !y_correction_ && fabs(last_vel_.linear.x) < 0.1)
+	if (fabs(cdev.linear.x) <= tolerance_trans_ && fabs(cdev.linear.y) > tolerance_trans_ && fabs(cdev.angular.z) <= tolerance_rot_ && !y_correction_ && fabs(last_vel_.linear.x) < 0.08)
 	{
+		//tolerance_trans_ *= 2;
 		degrees_ = 0;
 		obst_dist_at_start_ = obstacle_dist;
 		y_correction_ = true;
@@ -704,10 +735,14 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		else
 			forward_ = -1;
 	}
-	//else if(y_correction_ && ( (degrees_ >= 15 && v_max_ < 0.22) || degrees_ >= 25) )
-	else if(y_correction_ && ( obstacle_dist < 0.65*obst_dist_at_start_ || degrees_ >= 25) )
+	//else if(y_correction_ && ( obstacle_dist < 0.65*obst_dist_at_start_ || degrees_ >= 25) )
+	else if(y_correction_)
 	{
-		turning = -1;
+		float turning_fac = 0.55;	
+		if (forward_ < 0)
+			turning_fac = 0.68;
+		if (obstacle_dist < turning_fac*obst_dist_at_start_ || degrees_ >= 25)
+			turning = -1;
 	}
 	if(y_correction_ && (degrees_ >= 50 || v_max_ < 0.001))
 	{
@@ -733,23 +768,23 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		cdev.angular.z = 0.2*sign(angle);
 		cdev.linear.x = forward_*turning_radius_*fabs(cdev.angular.z);
 	}
-	else if (dist_to_goal < 1*tolerance_trans_)
-	{
-		//ROS_WARN("direkt");
-		if (fabs(cdev.linear.x) < turning_radius_*fabs(cdev.angular.z))
-		{
-			if (fabs(cdev.linear.x) < 0.001)
-				cdev.linear.x = turning_radius_*fabs(cdev.angular.z);
-			else
-				cdev.linear.x *= turning_radius_*fabs(cdev.angular.z/cdev.linear.x);
-		}
-	}
-	else if (v_max_ < 0.001)
-	{
-		angle_correction_ = true;
-		stuck_ = true;
-		forward_ = 1;
-	}
+	//else if (dist_to_goal < 1*tolerance_trans_)
+	//{
+	//	//ROS_WARN("direkt");
+	//	if (fabs(cdev.linear.x) < turning_radius_*fabs(cdev.angular.z))
+	//	{
+	//		if (fabs(cdev.linear.x) < 0.001)
+	//			cdev.linear.x = turning_radius_*fabs(cdev.angular.z);
+	//		else
+	//			cdev.linear.x *= turning_radius_*fabs(cdev.angular.z/cdev.linear.x);
+	//	}
+	//}
+	//else if (v_max_ < 0.001)
+	//{
+	//	angle_correction_ = true;
+	//	stuck_ = true;
+	//	forward_ = 1;
+	//}
 	else
 	{	
 		double theta_reachable = angles::normalize_angle(2*atan((H2.y-H1.y)/(H2.x-H1.x)));	
@@ -825,7 +860,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			ROS_ERROR("nicht erreichbar");
 		}*/
 		
-		theta_reachable = angles::normalize_angle(theta_reachable + a*(theta_reachable - cdev.angular.z));
+		//theta_reachable = angles::normalize_angle(theta_reachable + a*(theta_reachable - cdev.angular.z));
 		/*
 		if(korrektur && rechts && theta_reachable/arclength > kr)
 		ROS_ERROR("Hat gereicht");

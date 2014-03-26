@@ -117,6 +117,9 @@ void CollisionVelocityFilter::filterVelocity(geometry_msgs::Twist& desired_vel)
   pthread_mutex_lock(&m_mutex);
 
   last_vel_ = desired_vel;
+  radius_ = last_vel_.linear.x/last_vel_.angular.z;
+  center_of_rotation_.x = -center_ax_dist_;
+  center_of_rotation_.y = radius_;
 
   pthread_mutex_unlock(&m_mutex);
 
@@ -230,6 +233,8 @@ void CollisionVelocityFilter::performControllerStep(bool obstacle_on_side)
   }*/
   double acc_max = 0.1;
   v_max_ = sqrt(2.0 * (closest_obstacle_dist_-stop_threshold_) * acc_max);
+  if(obstacle_on_side)
+	v_max_ = sqrt(2.0 * (closest_obstacle_dist_-stop_threshold_/5) * acc_max);
   if(closest_obstacle_dist_ < influence_radius_) 
   {
 	   double ang_pseudo_dist = cmd_vel.angular.z * sqrt(footprint_front_*footprint_front_+footprint_left_*footprint_left_);
@@ -239,8 +244,9 @@ void CollisionVelocityFilter::performControllerStep(bool obstacle_on_side)
 		   double scale = v_max_/abs_cmd_vel;
 		   cmd_vel.linear.y *= scale;
 		   cmd_vel.angular.z *= scale;
-		  //if(!obstacle_on_side)
 		   cmd_vel.linear.x *= scale;
+		   //if(obstacle_on_side)
+			//cmd_vel.linear.x += 0.05;
 	   }
   }
 	
@@ -428,6 +434,140 @@ void CollisionVelocityFilter::obstacleHandler()
   
   performControllerStep(obstacle_on_side);
 }
+
+/* The following is an improved obstacle handler for ackermann
+void CollisionVelocityFilter::obstacleHandler()
+{
+  pthread_mutex_lock(&m_mutex);
+  if(!costmap_received_) 
+  {
+    ROS_WARN("No costmap has been received by cob_collision_velocity_filter, the robot will drive without obstacle avoidance!");
+    closest_obstacle_dist_ = influence_radius_;
+
+    pthread_mutex_unlock(&m_mutex);
+    return;
+  }
+  closest_obstacle_dist_ = influence_radius_;
+  pthread_mutex_unlock(&m_mutex);
+
+  double cur_distance_to_center, cur_distance_to_border, cur_distance_to_center_of_rotation;
+  double obstacle_theta_robot, obstacle_delta_theta_robot, obstacle_dist_vel_dir;
+  bool cur_obstacle_relevant;
+  geometry_msgs::Point cur_obstacle_robot;
+  geometry_msgs::Point zero_position;
+  zero_position.x=0.0f;  
+  zero_position.y=0.0f;
+  zero_position.z=0.0f;
+    
+  //Calculate corner angles in robot_frame:
+  double corner_front_left, corner_rear_left, corner_rear_right, corner_front_right;
+  corner_front_left = atan2(footprint_left_, footprint_front_);
+  corner_rear_left = atan2(footprint_left_, footprint_rear_);
+  corner_rear_right = atan2(footprint_right_, footprint_rear_);
+  corner_front_right = atan2(footprint_right_, footprint_front_);
+  
+  // Find farthest and nearest distance from center of rotation to robot
+  double inner_radius, outer_radius, corner_radius;
+  if (radius_ < 0)
+  {
+	inner_radius = radius_ - footprint_right_;
+	outer_radius = radius_ - footprint_left_;
+  }
+  else
+  {
+	inner_radius = radius_ - footprint_left_;
+	outer_radius = radius_ - footprint_right_;
+  }
+  corner_radius = 0;
+  double corner_dist, circumscribed_radius = 0.0f;
+  for(unsigned i = 0; i<robot_footprint_.size(); i++) 
+  {
+    corner_dist = getDistance2d(zero_position,robot_footprint_[i]);
+    if(corner_dist > circumscribed_radius) circumscribed_radius = corner_dist;
+    double temp_corner_radius = getDistance2d(center_of_rotation_,robot_footprint_[i]);
+    if(temp_corner_radius > corner_radius) corner_radius = temp_corner_radius;
+  }
+
+  //find relevant obstacles
+  pthread_mutex_lock(&m_mutex);
+  relevant_obstacles_.header = last_costmap_received_.header;
+  relevant_obstacles_.cell_width = last_costmap_received_.cell_width;
+  relevant_obstacles_.cell_height = last_costmap_received_.cell_height;
+  relevant_obstacles_.cells.clear();
+
+  for(unsigned int i = 0; i < last_costmap_received_.cells.size(); i++)
+  {
+	double angle_difference = 10;
+    cur_obstacle_relevant = false;
+    cur_distance_to_center = getDistance2d(zero_position, last_costmap_received_.cells[i]);
+    cur_distance_to_center_of_rotation = getDistance2d(center_of_rotation_, last_costmap_received_.cells[i]);
+    //check whether current obstacle lies inside the circumscribed_radius of the robot -> prevent collisions while rotating
+    if(cur_distance_to_center_of_rotation > inner_radius && cur_distance_to_center_of_rotation < corner_radius && cur_distance_to_center < influence_radius_)
+    {
+      cur_obstacle_robot = last_costmap_received_.cells[i];
+      double cur_obst_angle = atan2(cur_obstacle_robot.y-center_of_rotation_.y, cur_obstacle_robot.x-center_of_rotation_.x);
+	  double robot_reference_angle;
+      if( obstacleValid(cur_obstacle_robot.x, cur_obstacle_robot.y) ) 
+      {
+		double near_corner = sqrt((footprint_rear_+center_ax_dist_)*(footprint_rear_+center_ax_dist_)+outer_radius*outer_radius);
+		bool relevant = true;
+		
+		if (sign(last_vel_.linear.x) >= 0)
+		{
+			if (cur_distance_to_center_of_rotation <= sqrt((footprint_front_+center_ax_dist_)*(footprint_front_+center_ax_dist_)+inner_radius*inner_radius))
+				robot_reference_angle = asin(inner_radius/cur_distance_to_center_of_rotation);
+			else if (cur_distance_to_center_of_rotation <= corner_radius && sign(radius_)*cur_obst_angle > atan2(-outer_radius,(footprint_front_+center_ax_dist_)))
+				robot_reference_angle = -acos((footprint_front_+center_ax_dist_)/cur_distance_to_center_of_rotation)*sign(radius_);
+			else if (cur_distance_to_center_of_rotation <= near_corner)
+				robot_reference_angle = -(acos(outer_radius/cur_distance_to_center_of_rotation)+M_PI/2.0)*sign(radius_);
+			else
+				relevant = false;			
+		}
+		else
+		{
+			if (cur_distance_to_center_of_rotation <= sqrt((footprint_rear_+center_ax_dist_)*(footprint_rear_+center_ax_dist_)+inner_radius*inner_radius))
+				robot_reference_angle = asin(inner_radius/cur_distance_to_center_of_rotation);
+			else if (cur_distance_to_center_of_rotation <= near_corner && -sign(radius_)*cur_obst_angle < atan2(-outer_radius,footprint_rear_+center_ax_dist_))
+				robot_reference_angle = -acos((footprint_front_+center_ax_dist_)/cur_distance_to_center_of_rotation)*sign(radius_);
+			else if (cur_distance_to_center_of_rotation <= corner_radius)
+				robot_reference_angle = acos((footprint_front_+center_ax_dist_)/cur_distance_to_center_of_rotation);
+			else
+				relevant = false;	
+		}
+		
+		if (relevant)
+		{
+			angle_difference = angles::normalize_angle(cur_obst_angle - robot_reference_angle);
+			if (angle_difference*sign(radius_)*sign(last_vel_.linear.x) > 0)
+			{
+				cur_obstacle_relevant = true;
+			}
+		}
+			
+        obstacle_theta_robot = atan2(cur_obstacle_robot.y, cur_obstacle_robot.x);
+        
+      }
+    }
+    
+    if(cur_obstacle_relevant) 
+    { //now calculate distance of current, relevant obstacle to robot
+		cur_distance_to_border = fabs(radius_*angle_difference);
+      if(cur_distance_to_border < closest_obstacle_dist_) 
+      {
+        closest_obstacle_dist_ = cur_distance_to_border;
+        closest_obstacle_angle_ = obstacle_theta_robot;
+      }      
+    }	
+  }
+  bool obstacle_on_side = false;
+  if((closest_obstacle_angle_ >= corner_front_left && closest_obstacle_angle_ < corner_rear_left) || (closest_obstacle_angle_ <= corner_front_right && closest_obstacle_angle_ > corner_rear_right))
+  {
+    obstacle_on_side = true;
+  }  
+  pthread_mutex_unlock(&m_mutex);
+  
+  performControllerStep(obstacle_on_side);
+}*/
    
 double CollisionVelocityFilter::getMaximumVelocity()
 {
@@ -447,17 +587,6 @@ bool CollisionVelocityFilter::obstacleValid(double x_obstacle, double y_obstacle
     ROS_WARN("Found an obstacle inside robot_footprint: Skip!");
     return false;
   }
-  
-  // Don't consider obstacles which lie inside the current turning circle
-  double radius = last_vel_.linear.x/last_vel_.angular.z;
-  double inner_radius;
-  if (radius < 0)
-	inner_radius = radius - footprint_right_;
-  else
-	inner_radius = radius - footprint_left_;
-  if((x_obstacle+center_ax_dist_)*(x_obstacle+center_ax_dist_) + (y_obstacle-radius)*(y_obstacle-radius) < inner_radius*inner_radius) 
-    return false;
-
   return true;
 }
 bool CollisionVelocityFilter::obstacleValidCircum(double x_obstacle, double y_obstacle) 
@@ -469,17 +598,16 @@ bool CollisionVelocityFilter::obstacleValidCircum(double x_obstacle, double y_ob
   }
   
   // Don't consider obstacles which lie inside the current turning circle
-  double radius = last_vel_.linear.x/last_vel_.angular.z;
   double inner_radius;
-  if (radius < 0)
-	inner_radius = radius - footprint_right_;
+  if (radius_ < 0)
+	inner_radius = radius_ - footprint_right_;
   else
-	inner_radius = radius - footprint_left_;
-  if((x_obstacle+center_ax_dist_)*(x_obstacle+center_ax_dist_) + (y_obstacle-radius)*(y_obstacle-radius) < inner_radius*inner_radius) 
+	inner_radius = radius_ - footprint_left_;
+  if((x_obstacle+center_ax_dist_)*(x_obstacle+center_ax_dist_) + (y_obstacle-radius_)*(y_obstacle-radius_) < inner_radius*inner_radius) 
     return false;
-  if(last_vel_.linear.x*radius < 0 && (x_obstacle+center_ax_dist_)*y_obstacle > 0)
+  if(last_vel_.linear.x*radius_ < 0 && (x_obstacle+center_ax_dist_)*y_obstacle > 0)
 	return false;
-  if(last_vel_.linear.x*radius >= 0 && (x_obstacle+center_ax_dist_)*y_obstacle < 0)
+  if(last_vel_.linear.x*radius_ >= 0 && (x_obstacle+center_ax_dist_)*y_obstacle < 0)
 	return false;
 
   return true;
