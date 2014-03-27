@@ -84,10 +84,10 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		center_ax_dist_ = center_ax_dist;	
 		pn.param("max_steering_angle", max_steering_angle_, 0.7);
 		turning_radius_ = 2*center_ax_dist_/tan(max_steering_angle_);
-		turning_radius_ *= 1.2; // the radius in planning is bigger than the actual radius, to have some latitude in the trajectory control
+		turning_radius_ *= 1.1; // the radius in planning is bigger than the actual radius, to have some latitude in the trajectory control
 		pn.param("overlap_tolerance", overlap_tolerance_, 0.0);
-		pn.param("fill_tol", fill_tol_, 0.5);
-		pn.param("remove_tol", remove_tol_, 1.0);
+		pn.param("fill_tolerance", fill_tol_, 0.5);
+		pn.param("remove_tolerance", remove_tol_, 1.0);
 		pn.param("interpolate_carlike", interpolate_carlike_, false);
 				
 		// connectivity checking
@@ -98,7 +98,7 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		pn.param("eband_tiny_bubble_expansion", tiny_bubble_expansion_, 0.01);
 
 		// optimization - force calculation
-		pn.param("eband_internal_force_gain", internal_force_gain_, 1.0);
+		pn.param("eband_internal_force_gain", internal_force_gain_, 0.8);
 		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 0.8);		
 		pn.param("eband_external_force_gain", external_force_gain_, 0.1);
 		pn.param("num_iterations_eband_optimization", num_optim_iterations_, 3);

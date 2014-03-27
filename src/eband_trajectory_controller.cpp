@@ -493,11 +493,7 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 		desired_velocity.linear.x *= scale_des_vel;
 		desired_velocity.linear.y *= scale_des_vel;
 	}
-	
-	// FILTER
-	//ROS_WARN("Twist vor Filter: (%f, %f, %f)",desired_velocity.linear.x,desired_velocity.linear.y,desired_velocity.angular.z);
-	//cvf_->filterVelocity(desired_velocity);
-	//ROS_WARN("Twist nach Filter: (%f, %f, %f)",desired_velocity.linear.x,desired_velocity.linear.y,desired_velocity.angular.z);
+
 	
 	// calculate resulting force (accel. resp.) (Khatib86 - Realtime Obstacle Avoidance)
 	geometry_msgs::Twist acc_desired;
@@ -622,7 +618,8 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
                   break;
 		}
 	}
-			
+	
+	// filter velocity to avoid collisions
 	cvf_->filterVelocity(robot_cmd);
 			
 	// if Ackermann cinematics is desired check again the twist to hold the constraints
@@ -772,10 +769,6 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	// magnitudes related to the trajectory
 	double radius, arclength, curvature;
 	
-	double dist_to_next_pose = getDistance2d(rear_axle_1,rear_axle_2);
-	//if ((dist_to_next_pose < tolerance_trans_ || !checkReachability(rear_axle_1,rear_axle_2, cdev.angular.z)) && !y_correction_)
-	//if (!checkReachability(rear_axle_1,rear_axle_2, cdev.angular.z) && !y_correction_ && !aim_for_the_goal)
-	
 	if (y_correction_)
 	{
 		ROS_WARN("y correction");
@@ -790,23 +783,6 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		cdev.angular.z = 0.2*sign(angle);
 		cdev.linear.x = forward_*turning_radius_*fabs(cdev.angular.z);
 	}
-	//else if (aim_for_the_goal)
-	//{
-	//	//ROS_WARN("direkt");
-	//	if (fabs(cdev.linear.x) < turning_radius_*fabs(cdev.angular.z))
-	//	{
-	//		if (fabs(cdev.linear.x) < 0.001)
-	//			cdev.linear.x = turning_radius_*fabs(cdev.angular.z);
-	//		else
-	//			cdev.linear.x *= turning_radius_*fabs(cdev.angular.z/cdev.linear.x);
-	//	}
-	//}
-	//else if (v_max_ < 0.001)
-	//{
-	//	angle_correction_ = true;
-	//	stuck_ = true;
-	//	forward_ = 1;
-	//}
 	else
 	{	
 		// normal driving mode
