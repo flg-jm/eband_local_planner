@@ -100,7 +100,7 @@ void EBandPlanner::initialize(std::string name, costmap_2d::Costmap2DROS* costma
 		// optimization - force calculation
 		pn.param("eband_internal_force_gain", internal_force_gain_, 1.0);
 		pn.param("eband_ackermann_force_gain", ackermann_force_gain_, 0.8);		
-		pn.param("eband_external_force_gain", external_force_gain_, 0.05);
+		pn.param("eband_external_force_gain", external_force_gain_, 0.1);
 		pn.param("num_iterations_eband_optimization", num_optim_iterations_, 3);
 
 		// recursive approximation of bubble equilibrium position based
@@ -1570,7 +1570,7 @@ bool EBandPlanner::calcInternalForces(int bubble_num, std::vector<Bubble> band, 
 
 	float addForce_fac = ackermann_force_gain_*turning_radius_;
 	float dist_to_goal = getDistance2d(band.at(0).center.pose.position,band.at((int) band.size()-1).center.pose.position);
-	if (dist_to_goal < 2.0 && near_obstacle_)
+	if (dist_to_goal < 1.0 && near_obstacle_)
 		addForce_fac = 0;
 	float startfaktor = addForce_fac;
 	float endfaktor = addForce_fac;

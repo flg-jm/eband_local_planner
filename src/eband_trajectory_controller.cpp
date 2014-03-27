@@ -141,7 +141,7 @@ void EBandTrajectoryCtrl::initialize(std::string name, costmap_2d::Costmap2DROS*
 		//start-/stop-smoothing parameters
 		node_private.param("smoothing_enabled", smoothing_enabled_, true);
 		node_private.param("start_smooth_iter", start_smoothing_border_, 10);
-		node_private.param("stop_smoothing_dist_to_goal", stop_smoothing_dist_, 0.2);
+		node_private.param("stop_smoothing_dist_to_goal", stop_smoothing_dist_, 0.1);
 
 		start_position_counter_ = 0;
 
@@ -280,8 +280,8 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	//double abs_ctrl_dev;
 	control_deviation = bubble_diff;
 
-
 	// yet depending on the expansion of our bubble we might want to adapt this point
+	bool aim_for_the_goal = false;
 	if(scaled_radius < bubble_distance)
 	{
 		// triviale case - simply scale bubble_diff
@@ -369,6 +369,8 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 				}
 			}
 		}
+		else
+			aim_for_the_goal = true;
 	}
 
 
@@ -435,8 +437,9 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	
 	// now convert into robot-body frame
 	control_deviation = transformTwistFromFrame1ToFrame2(control_deviation, ref_frame_band_, elastic_band_.at(0).center.pose);
-		
-	getTwistAckermann(control_deviation, dist_to_goal);
+	
+	// calculate an Ackermann-Twist
+	getTwistAckermann(control_deviation, aim_for_the_goal);
 	
 	
 	// now the actual control procedure start (using attractive Potentials)
@@ -493,7 +496,7 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	
 	// FILTER
 	//ROS_WARN("Twist vor Filter: (%f, %f, %f)",desired_velocity.linear.x,desired_velocity.linear.y,desired_velocity.angular.z);
-	cvf_->filterVelocity(desired_velocity);
+	//cvf_->filterVelocity(desired_velocity);
 	//ROS_WARN("Twist nach Filter: (%f, %f, %f)",desired_velocity.linear.x,desired_velocity.linear.y,desired_velocity.angular.z);
 	
 	// calculate resulting force (accel. resp.) (Khatib86 - Realtime Obstacle Avoidance)
@@ -620,7 +623,8 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 		}
 	}
 			
-		
+	cvf_->filterVelocity(robot_cmd);
+			
 	// if Ackermann cinematics is desired check again the twist to hold the constraints
 	if (fabs(robot_cmd.linear.x) < fabs(robot_cmd.angular.z)*turning_radius_)
 	{
@@ -630,11 +634,12 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	// keep relation between angular velocity and translational velocity in y direction
 	robot_cmd.linear.y = robot_cmd.angular.z*center_ax_dist_;
 	
+	degrees_ += fabs(robot_cmd.angular.z)/ctrl_freq_;
 
 	twist_cmd = robot_cmd;
 	last_vel_ = robot_cmd;
 	
-	if (fabs(last_vel_.linear.x) < 0.04 && !wait_)
+	if (fabs(last_vel_.linear.x) < 0.02 && !wait_)
 	{
 		wait_count_ = 0;
 		wait_ = true;
@@ -642,25 +647,32 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	if (wait_)
 	{
 		wait_count_ ++;
-		if (fabs(last_vel_.linear.x) >= 0.05)
+		if (fabs(last_vel_.linear.x) >= 0.03)
 		{
 			wait_ = false;
 			wait_count_ = 0;
 		}
 		
 	}
-	if (wait_count_/ctrl_freq_ > 2)
+	if (wait_count_/ctrl_freq_ > 2 && aim_for_the_goal)
+	{
+		goal_reached = true;
+		wait_ = false;
+		wait_count_ = 0;
+		ROS_WARN("I'm not in the goal tolerance but I think it's okay");
+	}
+	if (!stuck_ && wait_count_/ctrl_freq_ > 2)
 	{
 		angle_correction_ = true;
 		stuck_ = true;
 		forward_ = 1;
 	}
-	if (wait_count_/ctrl_freq_ > 5)
+	else if (wait_count_/ctrl_freq_ > 5)
 	{
 		goal_reached = true;
 		wait_ = false;
 		wait_count_ = 0;
-		ROS_WARN("I give it up to reach the goal.");
+		ROS_WARN("I'm sorry. I don't know how to continue. I give up");
 	}
 	
 	// in the case we are still in the correction mode: turn it off if the goal is reached
@@ -668,36 +680,46 @@ bool EBandTrajectoryCtrl::getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_r
 	{
 		y_correction_ = false;
 		angle_correction_ = false;
+		stuck_ = false;
 		tolerance_trans_ = 0.02*(1+turning_radius_);
 	}
 	
 	return true;
 }
 
-bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviation, double dist_to_goal)
+bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviation, bool aim_for_the_goal)
 {
+	// maximal allowed velocity calculated by collision_velocity_filter
 	v_max_ = cvf_->getMaximumVelocity();
+	
+	// closest obstacle distance and angle from collision_velocity_filter
 	double obstacle_dist, obstacle_angle;
 	cvf_->getClosestObstacle(obstacle_dist, obstacle_angle);
 	
+	// for simplicity define a shorter variable for the control_deviation
 	geometry_msgs::Twist cdev;
 	cdev = control_deviation;
 
-	geometry_msgs::Point H1, H2;
+	// Important Points for the generation of the twist are the centers of the rear axles of the current pose and the desired pose
+	geometry_msgs::Point rear_axle_1, rear_axle_2;
+	rear_axle_1.x = - center_ax_dist_;
+	rear_axle_1.y = 0.0;
+	rear_axle_2.x = cdev.linear.x - center_ax_dist_*cos(cdev.angular.z);
+	rear_axle_2.y = cdev.linear.y - center_ax_dist_*sin(cdev.angular.z);
 	
-	H1.x = - center_ax_dist_;
-	H1.y = 0.0;
-	H2.x = cdev.linear.x - center_ax_dist_*cos(cdev.angular.z);
-	H2.y = cdev.linear.y - center_ax_dist_*sin(cdev.angular.z);
+
+	// Conditions for different modes of driving
 	
-	double theta_reachable = angles::normalize_angle(2*atan((H2.y-H1.y)/(H2.x-H1.x)));
-	// welcher winkel ist größer?
-	double angle = cdev.angular.z;
-	//if (fabs(theta_reachable)>fabs(angle) && fabs(H2.x-H1.x) < tolerance_trans_ && dist_to_goal > 0.5)
-		//angle = theta_reachable;
+	if (obstacle_dist > 0.3 && stuck_ && degrees_ >= 0.5)
+	{
+		stuck_ = false;
+		angle_correction_ = false;
+		ROS_ERROR("Unstuck");
+	}
 	
 	// Angle correction
-	if(fabs(H2.x-H1.x) < 0.8*turning_radius_*fabs(angle) && !angle_correction_ && !y_correction_)
+	double angle = cdev.angular.z;
+	if(fabs(rear_axle_2.x-rear_axle_1.x) < 0.8*turning_radius_*fabs(angle) && !angle_correction_ && !y_correction_)
 	{
 		degrees_ = 0;
 		angle_correction_ = true;
@@ -706,26 +728,20 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		else
 			forward_ = 1;
 	}
-	else if(angle_correction_ && (degrees_ >= 50 || v_max_ < 0.01))
+	else if(angle_correction_ && (degrees_ >= M_PI/4 || v_max_ < 0.01))
 	{
 			degrees_ = 0;
 			forward_ *= -1.0;
 	}
-	if((fabs(H2.x-H1.x) > 1.2*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_) && !stuck_)
+	if((fabs(rear_axle_2.x-rear_axle_1.x) > 1.2*turning_radius_*fabs(angle) || fabs(angle) < tolerance_rot_) && !stuck_)
 	{
 		angle_correction_ = false;
 	}
 	
-	if (obstacle_dist > 0.2)
-	{
-		stuck_ = false;
-	}
-	
 	// Y correction
 	float turning = 1;
-	if (fabs(cdev.linear.x) <= tolerance_trans_ && fabs(cdev.linear.y) > tolerance_trans_ && fabs(cdev.angular.z) <= tolerance_rot_ && !y_correction_ && fabs(last_vel_.linear.x) < 0.08)
+	if (fabs(cdev.linear.x) <= tolerance_trans_ && fabs(cdev.linear.y) > tolerance_trans_ && fabs(cdev.angular.z) <= tolerance_rot_ && !y_correction_ && !stuck_ && fabs(last_vel_.linear.x) < 0.07)
 	{
-		//tolerance_trans_ *= 2;
 		degrees_ = 0;
 		obst_dist_at_start_ = obstacle_dist;
 		y_correction_ = true;
@@ -735,40 +751,46 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 		else
 			forward_ = -1;
 	}
-	//else if(y_correction_ && ( obstacle_dist < 0.65*obst_dist_at_start_ || degrees_ >= 25) )
 	else if(y_correction_)
 	{
-		float turning_fac = 0.55;	
+		float turning_fac = 0.6;	
 		if (forward_ < 0)
-			turning_fac = 0.68;
-		if (obstacle_dist < turning_fac*obst_dist_at_start_ || degrees_ >= 25)
+			turning_fac = 0.7;
+		if (obstacle_dist < turning_fac*obst_dist_at_start_ || degrees_ >= M_PI/4)
 			turning = -1;
 	}
-	if(y_correction_ && (degrees_ >= 50 || v_max_ < 0.001))
+	if(y_correction_ && (degrees_ >= M_PI/2 || v_max_ < 0.001))
 	{
 		y_correction_ = false;
 	}
 		
 	
-	double dist_to_next_pose = getDistance2d(H1,H2);
-	//if ((dist_to_next_pose < tolerance_trans_ || !checkReachability(H1,H2, cdev.angular.z)) && !y_correction_)
-	//if (!checkReachability(H1,H2, cdev.angular.z) && !y_correction_ && dist_to_goal > 2*turning_radius_)
+	// Here the twist is generated
+	
+	// Angle one comes out if the desired position shall be reached by driving an arc-shaped trajectory
+	double theta_reachable = angles::normalize_angle(2*atan((rear_axle_2.y-rear_axle_1.y)/(rear_axle_2.x-rear_axle_1.x)));
+	// magnitudes related to the trajectory
+	double radius, arclength, curvature;
+	
+	double dist_to_next_pose = getDistance2d(rear_axle_1,rear_axle_2);
+	//if ((dist_to_next_pose < tolerance_trans_ || !checkReachability(rear_axle_1,rear_axle_2, cdev.angular.z)) && !y_correction_)
+	//if (!checkReachability(rear_axle_1,rear_axle_2, cdev.angular.z) && !y_correction_ && !aim_for_the_goal)
 	
 	if (y_correction_)
 	{
 		ROS_WARN("y correction");
-		degrees_ ++;
+		//degrees_ ++;
 		cdev.angular.z = forward_*turning*0.15*sign(cdev.linear.y);
 		cdev.linear.x = forward_*fabs(cdev.angular.z)*turning_radius_;
 	}
 	else if (angle_correction_)
 	{
 		ROS_WARN("Angle correction");
-		degrees_ ++;
+		//degrees_ ++;
 		cdev.angular.z = 0.2*sign(angle);
 		cdev.linear.x = forward_*turning_radius_*fabs(cdev.angular.z);
 	}
-	//else if (dist_to_goal < 1*tolerance_trans_)
+	//else if (aim_for_the_goal)
 	//{
 	//	//ROS_WARN("direkt");
 	//	if (fabs(cdev.linear.x) < turning_radius_*fabs(cdev.angular.z))
@@ -787,39 +809,39 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	//}
 	else
 	{	
-		double theta_reachable = angles::normalize_angle(2*atan((H2.y-H1.y)/(H2.x-H1.x)));	
-		double radius, arclength, kr;
+		// normal driving mode
 		if (fabs(theta_reachable) > 0.001)
 		{
-			radius = (H2.x-H1.x)/sin(theta_reachable);
+			radius = (rear_axle_2.x-rear_axle_1.x)/sin(theta_reachable);
 			arclength = radius*theta_reachable;
-			kr = 1.0/radius;
+			curvature = 1.0/radius;
 		}
 		else
 		{
-			arclength = H2.x-H1.x;
-			kr = theta_reachable/arclength;
-			radius = (H2.x-H1.x)/sin(0.001);
+			arclength = rear_axle_2.x-rear_axle_1.x;
+			curvature = theta_reachable/arclength;
+			radius = (rear_axle_2.x-rear_axle_1.x)/sin(0.001);
 		}
 		
-		/*if (fabs(theta_reachable - cdev.angular.z) > tolerance_rot_)
+		// swing out correction - version 1
+		/*if (aim_for_the_goal && fabs(theta_reachable - cdev.angular.z) > tolerance_rot_)
 		{
 			geometry_msgs::Point L, R;
 			double turn_rad = 1.2*turning_radius_;
-			L.x = H2.x - turning_radius_*sin(cdev.angular.z);
-			L.y = H2.y + turning_radius_*cos(cdev.angular.z);
-			R.x = H2.x + turning_radius_*sin(cdev.angular.z);
-			R.y = H2.y - turning_radius_*cos(cdev.angular.z);
+			L.x = rear_axle_2.x - turning_radius_*sin(cdev.angular.z);
+			L.y = rear_axle_2.y + turning_radius_*cos(cdev.angular.z);
+			R.x = rear_axle_2.x + turning_radius_*sin(cdev.angular.z);
+			R.y = rear_axle_2.y - turning_radius_*cos(cdev.angular.z);
 
-			double alpha_L = angles::normalize_angle(2.0*atan((L.y - turn_rad)/(L.x - H1.x)));
-			double alpha_R = angles::normalize_angle(2.0*atan((R.y + turn_rad)/(R.x - H1.x)));
+			double alpha_L = angles::normalize_angle(2.0*atan((L.y - turn_rad)/(L.x - rear_axle_1.x)));
+			double alpha_R = angles::normalize_angle(2.0*atan((R.y + turn_rad)/(R.x - rear_axle_1.x)));
 			
 			double radius_L, arclength_L;
 			double radius_R, arclength_R;
 			
 			if (fabs(alpha_L) < 0.001)
 			{
-				arclength_L = L.x - H1.x;
+				arclength_L = L.x - rear_axle_1.x;
 			}
 			else
 			{
@@ -829,7 +851,7 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 				
 			if (fabs(alpha_R) < 0.001)
 			{
-				arclength_R = R.x - H1.x;
+				arclength_R = R.x - rear_axle_1.x;
 			}
 			else
 			{
@@ -839,62 +861,43 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 			
 			if ((fabs(arclength_R) < fabs(arclength_L)) && arclength*arclength_R > 0)
 			{
-				kr = alpha_R/arclength_R;
+				curvature = alpha_R/arclength_R;
 			}
 			else
 			{
-				kr = alpha_L/arclength_L;
+				curvature = alpha_L/arclength_L;
 			}
-		}*/
+		}
 			
+		/* swing out correction - version 2
 		double a = 0.1;
-		
-		if (dist_to_goal < 1.0)
+		if (aim_for_the_goal)
 			a = 0.3;
 		if (y_correction_)
 			a = 0.3;
-			
-		/*if (!checkReachability(H1,H2, cdev.angular.z))
-		{
-			a = -1.0;
-			ROS_ERROR("nicht erreichbar");
-		}*/
 		
-		//theta_reachable = angles::normalize_angle(theta_reachable + a*(theta_reachable - cdev.angular.z));
-		/*
-		if(korrektur && rechts && theta_reachable/arclength > kr)
-		ROS_ERROR("Hat gereicht");
-			//kr = theta_reachable/arclength;
-		else if(korrektur && !rechts && theta_reachable/arclength < kr)
-		ROS_ERROR("Hat gereicht");
-			//kr = theta_reachable/arclength;
-		else
-			ROS_ERROR("Hat nicht gereicht");
-		*/	
-		//if(!korrektur)
-			kr = theta_reachable/arclength;
-		
+		theta_reachable = angles::normalize_angle(theta_reachable + a*(theta_reachable - cdev.angular.z));
+		curvature = theta_reachable/arclength;
+		*/
 		
 		if (fabs(radius) < 1.1*turning_radius_)
 		{
 			ROS_WARN("Gib alles");
-			kr = 1/radius;
+			curvature = 1/radius;
 		}
 		
-		if (fabs(kr) > 1.0/turning_radius_)
-			kr = sign(kr)/turning_radius_;
+		if (fabs(curvature) > 1.0/turning_radius_)
+			curvature = sign(curvature)/turning_radius_;
 		
 		cdev.linear.x = arclength;
-		cdev.angular.z = angles::normalize_angle(arclength*kr);
+		cdev.angular.z = angles::normalize_angle(arclength*curvature);
 		
 	}
 	
 	cdev.linear.y = cdev.angular.z * center_ax_dist_;
 	
 	double slowdown = 1;
-	if (y_correction_)
-		slowdown = 0.3;
-	if (dist_to_goal < 1.0)
+	if (aim_for_the_goal)
 		slowdown = 0.8;
 
 	cdev.linear.x *= slowdown;
@@ -902,8 +905,6 @@ bool EBandTrajectoryCtrl::getTwistAckermann(geometry_msgs::Twist& control_deviat
 	cdev.angular.z *= slowdown;
 
 	control_deviation = cdev;
-	
-	//ROS_ERROR("Ackermann-twist: (%f, %f, %f)",control_deviation.linear.x,control_deviation.linear.y,control_deviation.angular.z);
 	
 	return true;
 }

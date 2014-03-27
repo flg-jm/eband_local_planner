@@ -93,7 +93,7 @@ CollisionVelocityFilter::CollisionVelocityFilter(costmap_2d::Costmap2DROS* costm
 
   // parameters for obstacle avoidence and velocity adjustment
   //if(!nh_.hasParam("stop_threshold")) ROS_WARN("Used default parameter for stop_threshold [0.1 m]");
-  nh_.param("stop_threshold", stop_threshold_, 0.08);
+  nh_.param("stop_threshold", stop_threshold_, 0.1);
 
   //if(!nh_.hasParam("obstacle_damping_dist")) ROS_WARN("Used default parameter for obstacle_damping_dist [5.0 m]");
   nh_.param("obstacle_damping_dist", obstacle_damping_dist_, 7.0);
@@ -134,11 +134,11 @@ void CollisionVelocityFilter::filterVelocity(geometry_msgs::Twist& desired_vel)
     last_vel_.angular.z = 0;
     v_max_ = 0;
   }
-  //else
-  //{
+  else
+  {
 	// adjust velocity if we are about to run in an obstacle
-	//performControllerStep();
-  //}
+	performControllerStep();
+  }
   	//ROS_ERROR("Closestobstacle: (dist,angle) = (%f,%f)",closest_obstacle_dist_,closest_obstacle_angle_);
 	ROS_ERROR("Vmax = %f",v_max_);
 	desired_vel = last_vel_;
@@ -181,15 +181,15 @@ void CollisionVelocityFilter::obstaclesCB(const nav_msgs::GridCells::ConstPtr &o
 
 
 // sets corrected velocity of joystick command
-void CollisionVelocityFilter::performControllerStep(bool obstacle_on_side) 
+void CollisionVelocityFilter::performControllerStep() 
 {
 
-  double vx_max, vy_max;
+  //double vx_max, vy_max;
   geometry_msgs::Twist cmd_vel;
 
   cmd_vel = last_vel_;
 
-  double vel_angle = atan2(cmd_vel.linear.y,cmd_vel.linear.x);
+  /*double vel_angle = atan2(cmd_vel.linear.y,cmd_vel.linear.x);
   vx_max = v_max_ * fabs(cos(vel_angle));
   if (vx_max > fabs(cmd_vel.linear.x)) vx_max = fabs(cmd_vel.linear.x);
   vy_max = v_max_ * fabs(sin(vel_angle));
@@ -233,20 +233,18 @@ void CollisionVelocityFilter::performControllerStep(bool obstacle_on_side)
   }*/
   double acc_max = 0.1;
   v_max_ = sqrt(2.0 * (closest_obstacle_dist_-stop_threshold_) * acc_max);
-  if(obstacle_on_side)
-	v_max_ = sqrt(2.0 * (closest_obstacle_dist_-stop_threshold_/5) * acc_max);
+  
   if(closest_obstacle_dist_ < influence_radius_) 
   {
 	   double ang_pseudo_dist = cmd_vel.angular.z * sqrt(footprint_front_*footprint_front_+footprint_left_*footprint_left_);
-	   double abs_cmd_vel = sqrt(cmd_vel.linear.x*cmd_vel.linear.x+cmd_vel.linear.y*cmd_vel.linear.y+ang_pseudo_dist*ang_pseudo_dist);
+	   //double abs_cmd_vel = sqrt(cmd_vel.linear.x*cmd_vel.linear.x+cmd_vel.linear.y*cmd_vel.linear.y+ang_pseudo_dist*ang_pseudo_dist);
+	   double abs_cmd_vel = sqrt(cmd_vel.linear.x*cmd_vel.linear.x+cmd_vel.linear.y*cmd_vel.linear.y);
 	   if (abs_cmd_vel > v_max_)
 	   {
 		   double scale = v_max_/abs_cmd_vel;
 		   cmd_vel.linear.y *= scale;
 		   cmd_vel.angular.z *= scale;
 		   cmd_vel.linear.x *= scale;
-		   //if(obstacle_on_side)
-			//cmd_vel.linear.x += 0.05;
 	   }
   }
 	
@@ -425,14 +423,7 @@ void CollisionVelocityFilter::obstacleHandler()
       }      
     }	
   }
-  bool obstacle_on_side = false;
-  if((closest_obstacle_angle_ >= corner_front_left && closest_obstacle_angle_ < corner_rear_left) || (closest_obstacle_angle_ <= corner_front_right && closest_obstacle_angle_ > corner_rear_right))
-  {
-    obstacle_on_side = true;
-  }  
   pthread_mutex_unlock(&m_mutex);
-  
-  performControllerStep(obstacle_on_side);
 }
 
 /* The following is an improved obstacle handler for ackermann

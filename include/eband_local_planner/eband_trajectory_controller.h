@@ -128,7 +128,7 @@ class EBandTrajectoryCtrl{
 		 * @param refernce to the twist cmd
 		 */
 		bool getTwist(geometry_msgs::Twist& twist_cmd, bool& goal_reached);
-		bool getTwistAckermann(geometry_msgs::Twist& control_deviation, double dist_to_goal);
+		bool getTwistAckermann(geometry_msgs::Twist& control_deviation, bool aim_for_the_goal);
 
 
 	private:

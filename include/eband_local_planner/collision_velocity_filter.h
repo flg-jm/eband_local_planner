@@ -151,7 +151,7 @@ class CollisionVelocityFilter
     /// @brief  checks distance to obstacles in driving direction and slows down/stops 
     ///         robot and publishes command velocity to robot
     ///
-    void performControllerStep(bool obstacle_on_side);
+    void performControllerStep();
     
     ///
     /// @brief  checks for obstacles in driving direction of the robot (rotation included) 
